@@ -97,6 +97,34 @@ export async function updateSessionRecord(
   }
 }
 
+export async function saveSessionPasswordRecord(
+  sessionId: number,
+  password: string,
+  dependencies: SessionPersistenceDependencies,
+): Promise<void> {
+  const previousPassword = await dependencies.getPassword(sessionId);
+  let passwordChanged = false;
+  try {
+    await dependencies.withTransaction(async (transaction) => {
+      await dependencies.setPassword(sessionId, password);
+      passwordChanged = password !== previousPassword;
+      await transaction.run(
+        'UPDATE session SET password = ?, remember_password = 1 WHERE id = ?',
+        ['', sessionId],
+      );
+    });
+  } catch (error) {
+    if (passwordChanged) {
+      if (previousPassword === null) {
+        await dependencies.deletePassword(sessionId).catch(() => undefined);
+      } else {
+        await dependencies.setPassword(sessionId, previousPassword).catch(() => undefined);
+      }
+    }
+    throw error;
+  }
+}
+
 export async function deleteSessionRecord(
   sessionId: number,
   dependencies: SessionPersistenceDependencies,

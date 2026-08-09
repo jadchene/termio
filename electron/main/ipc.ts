@@ -33,7 +33,7 @@ import {
   requireStringArray,
   validateSettingsPatch,
 } from './ipcValidation';
-import { createSessionRecord, deleteSessionRecord, updateSessionRecord } from './sessionPersistence';
+import { createSessionRecord, deleteSessionRecord, saveSessionPasswordRecord, updateSessionRecord } from './sessionPersistence';
 import {
   SSH_CONNECT_CANCELLED,
   beginConnectionAttempt,
@@ -330,10 +330,11 @@ export function registerIpc() {
             });
             if (savePassword) {
               const latestPassword = String(connectPayload.password || '');
-              Promise.all([
-                setSessionPasswordToKeytar(profileSessionId, latestPassword),
-                run('UPDATE session SET password = ?, remember_password = 1 WHERE id = ?', ['', profileSessionId]),
-              ])
+              void saveSessionPasswordRecord(
+                profileSessionId,
+                latestPassword,
+                sessionPersistenceDependencies,
+              )
                 .then(() => ok())
                 .catch((dbErr) => fail(dbErr));
               return;

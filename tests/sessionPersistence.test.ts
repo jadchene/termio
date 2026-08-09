@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DatabaseTransaction } from '../electron/main/db';
-import { createSessionRecord, type SessionPersistenceDependencies } from '../electron/main/sessionPersistence';
+import {
+  createSessionRecord,
+  saveSessionPasswordRecord,
+  type SessionPersistenceDependencies,
+} from '../electron/main/sessionPersistence';
 import type { Session } from '../electron/main/types';
 
 function createDependencies() {
@@ -70,4 +74,43 @@ test('failed commit removes a password written before the rollback', async () =>
   };
   await assert.rejects(createSessionRecord(session(0), dependencies), /commit failed/);
   assert.equal(passwords.has(42), false);
+});
+
+test('failed password-save commit restores the previous keytar password', async () => {
+  const { dependencies, passwords } = createDependencies();
+  passwords.set(7, 'old-password');
+  dependencies.withTransaction = async (work) => {
+    const transaction: DatabaseTransaction = {
+      run: async () => undefined,
+      insert: async () => 0,
+      get: async <R>() => undefined as R | undefined,
+      all: async <R>() => [] as R[],
+    };
+    await work(transaction);
+    throw new Error('commit failed');
+  };
+
+  await assert.rejects(
+    saveSessionPasswordRecord(7, 'new-password', dependencies),
+    /commit failed/,
+  );
+  assert.equal(passwords.get(7), 'old-password');
+});
+
+test('failed keytar password save does not update the database record', async () => {
+  const { dependencies } = createDependencies();
+  let databaseUpdated = false;
+  dependencies.setPassword = async () => { throw new Error('keytar failed'); };
+  dependencies.withTransaction = async (work) => work({
+    run: async () => { databaseUpdated = true; },
+    insert: async () => 0,
+    get: async <R>() => undefined as R | undefined,
+    all: async <R>() => [] as R[],
+  });
+
+  await assert.rejects(
+    saveSessionPasswordRecord(7, 'new-password', dependencies),
+    /keytar failed/,
+  );
+  assert.equal(databaseUpdated, false);
 });

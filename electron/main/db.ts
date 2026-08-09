@@ -4,6 +4,7 @@ import { dbPath } from './env';
 import { defaultSettings, SETTINGS_KEY, normalizeSettings, saveSettings, readAppSetting, writeAppSetting } from './settings';
 import { PASSWORD_MIGRATION_KEY, sharedState } from './state';
 import { setSessionPasswordToKeytar, deleteSessionPasswordFromKeytar } from './session';
+import { migrateSessionPasswords } from './passwordMigration';
 
 export const db = new sqlite3.Database(dbPath);
 
@@ -112,15 +113,13 @@ export async function migrateSessionPasswordsToKeytarIfNeeded() {
   const flag = await readAppSetting(PASSWORD_MIGRATION_KEY);
   if (flag === '1') return;
   const sessions = await all<Session>('SELECT * FROM session');
-  for (const session of sessions) {
-    const plainPassword = String(session.password || '');
-    if (session.remember_password === 1 && plainPassword) {
-      await setSessionPasswordToKeytar(session.id, plainPassword);
-    } else {
-      await deleteSessionPasswordFromKeytar(session.id);
-    }
-    await run('UPDATE session SET password = ? WHERE id = ?', ['', session.id]);
-  }
+  await migrateSessionPasswords(sessions, {
+    setPassword: setSessionPasswordToKeytar,
+    deletePassword: deleteSessionPasswordFromKeytar,
+    clearPlainPassword: async (sessionId) => {
+      await run('UPDATE session SET password = ? WHERE id = ?', ['', sessionId]);
+    },
+  });
   await writeAppSetting(PASSWORD_MIGRATION_KEY, '1');
 }
 
