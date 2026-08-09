@@ -92,6 +92,18 @@ contextBridge.exposeInMainWorld('terminalApi', {
   sftpDelete: (payload) => invokeSftp('sftp:delete', payload),
   sftpUpload: (payload) => invokeSftp('sftp:upload', payload),
   sftpDownload: (payload) => invokeSftp('sftp:download', payload),
+  sftpAuthorizeDroppedFiles: (files) => {
+    const localPaths = Array.from(files || [])
+      .map((file) => {
+        try {
+          return webUtils.getPathForFile(file) || '';
+        } catch {
+          return '';
+        }
+      })
+      .filter(Boolean);
+    return invokeSftp('sftp:authorize-upload', { localPaths });
+  },
   sftpUploadBatch: (payload) => invokeSftp('sftp:upload-batch', payload),
   sftpDownloadBatch: (payload) => invokeSftp('sftp:download-batch', payload),
   sftpStartNativeDrag: (payload) => ipcRenderer.send('sftp:start-native-drag', payload),
@@ -124,13 +136,6 @@ contextBridge.exposeInMainWorld('terminalApi', {
     return () => ipcRenderer.off('system:metrics', handler);
   },
 
-  getPathForDroppedFile: (file) => {
-    try {
-      return webUtils.getPathForFile(file) || '';
-    } catch {
-      return '';
-    }
-  },
   pickDirectory: (defaultPath) => ipcRenderer.invoke('dialog:pick-directory', defaultPath),
   getRuntimePaths: () => ipcRenderer.invoke('app:runtime-paths'),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),

@@ -1,11 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import path from 'node:path';
-import fs from 'node:fs';
+import { BrowserWindow } from 'electron';
 import os from 'node:os';
-import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 import { Session, SshConnectionState, SftpBatchControl, SftpProgressThrottleState, RemoteMetricsSnapshot, RemoteMetricsPayload } from './types';
 
 export const sshStateMap = new Map<number, SshConnectionState>();
@@ -42,6 +36,5 @@ export const sharedState = {
   metricsCollecting: false,
   metricsSessionId: null as number | null,
   metricsInactiveSent: false,
-  singleInstanceLock: false,
   settingsCache: null as any
 };

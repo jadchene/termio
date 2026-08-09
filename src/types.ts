@@ -16,7 +16,6 @@ export type Settings = {
     rightClickPaste: boolean;
     multilineWarning: boolean;
     defaultDownloadDir: string;
-    singleInstance: boolean;
     autoSwitchEnglishInputMethod: boolean;
   };
   ui: {
@@ -225,7 +224,8 @@ declare global {
       sftpDelete: (payload: { sessionId: number; path: string; isDir: boolean }) => Promise<boolean>;
       sftpUpload: (payload: { sessionId: number; remoteDir: string }) => Promise<boolean>;
       sftpDownload: (payload: { sessionId: number; remotePath: string }) => Promise<boolean>;
-      sftpUploadBatch: (payload: { sessionId: number; remoteDir: string; localPaths?: string[] }) => Promise<boolean>;
+      sftpAuthorizeDroppedFiles: (files: File[]) => Promise<string>;
+      sftpUploadBatch: (payload: { sessionId: number; remoteDir: string; uploadCapability?: string }) => Promise<boolean>;
       sftpDownloadBatch: (payload: { sessionId: number; remotePaths: string[]; localDir?: string }) => Promise<boolean>;
       sftpStartNativeDrag: (payload: {
         sessionId: number;
@@ -240,7 +240,6 @@ declare global {
       onSftpBatchError: (cb: (event: SftpTransferError) => void) => () => void;
 
       onMetrics: (cb: (metrics: Metrics) => void) => () => void;
-      getPathForDroppedFile: (file: File) => string;
       pickDirectory: (defaultPath?: string) => Promise<string | null>;
       getRuntimePaths: () => Promise<{ runtimeDir: string; userDataPath: string; settingsStorage: string; dbPath: string; os: string }>;
       openExternal: (url: string) => Promise<boolean>;

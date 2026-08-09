@@ -1,11 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import path from 'node:path';
-import fs from 'node:fs';
-import os from 'node:os';
-import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
 import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 import { Session } from './types';
 import { dbPath } from './env';
 import { defaultSettings, SETTINGS_KEY, normalizeSettings, saveSettings, readAppSetting, writeAppSetting } from './settings';
@@ -14,7 +7,24 @@ import { setSessionPasswordToKeytar, deleteSessionPasswordFromKeytar } from './s
 
 export const db = new sqlite3.Database(dbPath);
 
-export function run(sql: string, params: any[] = []): Promise<void> {
+type SqlParams = unknown[];
+
+export type DatabaseTransaction = {
+  run: (sql: string, params?: SqlParams) => Promise<void>;
+  insert: (sql: string, params?: SqlParams) => Promise<number>;
+  get: <T>(sql: string, params?: SqlParams) => Promise<T | undefined>;
+  all: <T>(sql: string, params?: SqlParams) => Promise<T[]>;
+};
+
+let databaseQueue: Promise<void> = Promise.resolve();
+
+function enqueueDatabaseOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = databaseQueue.then(operation, operation);
+  databaseQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function runDirect(sql: string, params: SqlParams = []): Promise<void> {
   return new Promise((resolve, reject) => {
     db.run(sql, params, (err) => {
       if (err) {
@@ -26,7 +36,19 @@ export function run(sql: string, params: any[] = []): Promise<void> {
   });
 }
 
-export function all<T>(sql: string, params: any[] = []): Promise<T[]> {
+function insertDirect(sql: string, params: SqlParams = []): Promise<number> {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(this.lastID);
+    });
+  });
+}
+
+function allDirect<T>(sql: string, params: SqlParams = []): Promise<T[]> {
   return new Promise((resolve, reject) => {
     db.all(sql, params, (err, rows) => {
       if (err) {
@@ -38,7 +60,7 @@ export function all<T>(sql: string, params: any[] = []): Promise<T[]> {
   });
 }
 
-export function get<T>(sql: string, params: any[] = []): Promise<T | undefined> {
+function getDirect<T>(sql: string, params: SqlParams = []): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (err, row) => {
       if (err) {
@@ -47,6 +69,42 @@ export function get<T>(sql: string, params: any[] = []): Promise<T | undefined> 
       }
       resolve(row as T | undefined);
     });
+  });
+}
+
+export function run(sql: string, params: SqlParams = []): Promise<void> {
+  return enqueueDatabaseOperation(() => runDirect(sql, params));
+}
+
+export function insert(sql: string, params: SqlParams = []): Promise<number> {
+  return enqueueDatabaseOperation(() => insertDirect(sql, params));
+}
+
+export function all<T>(sql: string, params: SqlParams = []): Promise<T[]> {
+  return enqueueDatabaseOperation(() => allDirect<T>(sql, params));
+}
+
+export function get<T>(sql: string, params: SqlParams = []): Promise<T | undefined> {
+  return enqueueDatabaseOperation(() => getDirect<T>(sql, params));
+}
+
+export function withTransaction<T>(work: (transaction: DatabaseTransaction) => Promise<T>): Promise<T> {
+  return enqueueDatabaseOperation(async () => {
+    await runDirect('BEGIN IMMEDIATE');
+    const transaction: DatabaseTransaction = {
+      run: runDirect,
+      insert: insertDirect,
+      get: getDirect,
+      all: allDirect,
+    };
+    try {
+      const result = await work(transaction);
+      await runDirect('COMMIT');
+      return result;
+    } catch (error) {
+      await runDirect('ROLLBACK').catch(() => undefined);
+      throw error;
+    }
   });
 }
 
@@ -67,6 +125,8 @@ export async function migrateSessionPasswordsToKeytarIfNeeded() {
 }
 
 export async function initStorage() {
+  await run('PRAGMA journal_mode = WAL');
+  await run('PRAGMA busy_timeout = 5000');
   await run(
     `CREATE TABLE IF NOT EXISTS session_folder (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +152,17 @@ export async function initStorage() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`,
+  );
+  await run(
+    `UPDATE session
+     SET default_session = 0
+     WHERE default_session = 1
+       AND id <> (SELECT MIN(id) FROM session WHERE default_session = 1)`,
+  );
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uk_session_single_default
+     ON session(default_session)
+     WHERE default_session = 1`,
   );
   await run(
     `CREATE TABLE IF NOT EXISTS ssh_host_key (

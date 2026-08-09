@@ -1,12 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
-import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
-import { db } from './db';
 
 export const isDev = !app.isPackaged;
 

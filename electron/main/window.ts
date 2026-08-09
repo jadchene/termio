@@ -1,11 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from 'electron';
+import { BrowserWindow, Menu, screen, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
-import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 import { WindowState } from './types';
 import { appRoot, windowStatePath, preloadCandidates, preloadPath, rendererDevUrl } from './env';
 import { sharedState } from './state';

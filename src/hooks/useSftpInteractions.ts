@@ -22,7 +22,6 @@ type UseSftpInteractionsParams = {
   navigateSftp: (nextPath: string) => Promise<boolean>;
   getCurrentSftpLocation: () => { sessionId: number | null; path: string };
   clearSftpSelectionNow: () => void;
-  getLocalPathsFromDrop: (event: React.DragEvent) => string[];
   submitSftpPath: () => Promise<void>;
   setSftpSelection: (fullPath: string, checked: boolean, range?: boolean) => void;
   showAlert: (message: string, title?: string) => Promise<void>;
@@ -47,7 +46,6 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
     navigateSftp,
     getCurrentSftpLocation,
     clearSftpSelectionNow,
-    getLocalPathsFromDrop,
     submitSftpPath,
     setSftpSelection,
     showAlert,
@@ -113,14 +111,18 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
       }, 'SFTP 拖拽');
       return;
     }
-    const localPaths = getLocalPathsFromDrop(e);
-    if (localPaths.length === 0) {
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (droppedFiles.length === 0) {
       await showAlert('未识别到可用的拖拽路径，请重试或使用上传按钮。', 'SFTP');
       return;
     }
+    const previewNames = droppedFiles.slice(0, 5).map((file) => file.name).join('、');
+    const remaining = droppedFiles.length > 5 ? ` 等 ${droppedFiles.length} 项` : '';
+    if (!await askConfirm(`确认上传本地文件：${previewNames}${remaining}？`, 'SFTP 上传')) return;
     clearSftpSelectionNow();
     await runSftpAction(async () => {
-      await window.terminalApi.sftpUploadBatch({ sessionId: activeSessionId, remoteDir: sftpPath, localPaths });
+      const uploadCapability = await window.terminalApi.sftpAuthorizeDroppedFiles(droppedFiles);
+      await window.terminalApi.sftpUploadBatch({ sessionId: activeSessionId, remoteDir: sftpPath, uploadCapability });
       await refreshSftp();
     });
   };

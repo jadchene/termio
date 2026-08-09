@@ -1,11 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import path from 'node:path';
-import fs from 'node:fs';
-import os from 'node:os';
 import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 
 export type AppSettings = {
   theme: {
@@ -25,7 +18,6 @@ export type AppSettings = {
     rightClickPaste: boolean;
     multilineWarning: boolean;
     defaultDownloadDir: string;
-    singleInstance: boolean;
     autoSwitchEnglishInputMethod: boolean;
   };
   ui: {

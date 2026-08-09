@@ -1,11 +1,3 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import path from 'node:path';
-import fs from 'node:fs';
-import os from 'node:os';
-import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 import { AppSettings } from './types';
 import { run, get } from './db';
 import { sharedState } from './state';
@@ -28,7 +20,6 @@ export const defaultSettings: AppSettings = {
     rightClickPaste: true,
     multilineWarning: true,
     defaultDownloadDir: '',
-    singleInstance: true,
     autoSwitchEnglishInputMethod: false,
   },
   ui: {
@@ -62,6 +53,8 @@ export function readSettings(): AppSettings {
 
 export function normalizeSettings(parsed: any): AppSettings {
   const mode = parsed?.theme?.mode === 'light' ? 'light' : 'dark';
+  const behavior = { ...((parsed && parsed.behavior) || {}) };
+  delete behavior.singleInstance;
   return {
     ...defaultSettings,
     ...(parsed || {}),
@@ -73,7 +66,7 @@ export function normalizeSettings(parsed: any): AppSettings {
       foregroundColor: mode === 'light' ? '#1F2328' : '#E5E7EB',
       uiFontFamily: 'MiSans, sans-serif',
     },
-    behavior: { ...defaultSettings.behavior, ...((parsed && parsed.behavior) || {}) },
+    behavior: { ...defaultSettings.behavior, ...behavior },
     ui: { ...defaultSettings.ui, ...((parsed && parsed.ui) || {}) },
   };
 }

@@ -1,19 +1,15 @@
-import { app, BrowserWindow, clipboard, dialog, Menu, shell } from 'electron';
+import { clipboard, dialog, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
-import { AppSettings, Session } from './types';
+import { Session } from './types';
 import { runtimeDir, userDataPath, dbPath } from './env';
-import { run, all, get } from './db';
+import { run, all, get, withTransaction } from './db';
 import { SETTINGS_KEY, readSettings, saveSettings } from './settings';
-import { applySingleInstancePreference } from './singleInstance';
 import { sshStateMap, sftpBatchControlMap, connectionSessionMap, lastKnownCwdMap, sharedState } from './state';
 import { runSftpUploadBatch, runSftpDownloadBatch, ensureUniqueLocalPath, getDefaultDownloadDir, resolveRemotePath, getOrCreateSftp } from './sftp';
-import { setSessionPasswordToKeytar, deleteSessionPasswordFromKeytar, toPublicSession, loadSession, getSessionForConnection, requireConnected, cleanupConnectionState } from './session';
+import { setSessionPasswordToKeytar, deleteSessionPasswordFromKeytar, getSessionPasswordFromKeytar, toPublicSession, loadSession, getSessionForConnection, requireConnected, cleanupConnectionState } from './session';
 import { getRemoteShellCwd, updateCwdFromPrompt } from './ssh';
 import { safeSend } from './window';
 import { switchToEnglishInputMethod } from './inputMethod';
@@ -24,6 +20,20 @@ import { cancelPendingAuthChallenges, registerAuthChallengeIpc, requestAuthChall
 import { isStoredPasswordPrompt } from './authPrompt';
 import { toSftpErrorPayload } from './sftpError';
 import { createTemporaryDownloadPath } from './downloadPath';
+import { consumeUploadCapability, createUploadCapability } from './uploadCapability';
+import {
+  parseSession,
+  requireBoolean,
+  requireIntegerInRange,
+  requireNullablePositiveId,
+  requirePath,
+  requirePositiveId,
+  requireRecord,
+  requireString,
+  requireStringArray,
+  validateSettingsPatch,
+} from './ipcValidation';
+import { createSessionRecord, deleteSessionRecord, updateSessionRecord } from './sessionPersistence';
 import {
   SSH_CONNECT_CANCELLED,
   beginConnectionAttempt,
@@ -48,6 +58,12 @@ const ipcMain = {
 
 const SSH_DATA_FLUSH_DELAY_MS = 4;
 const MAX_SSH_DATA_IPC_CHUNK = 64 * 1024;
+const sessionPersistenceDependencies = {
+  withTransaction,
+  getPassword: getSessionPasswordFromKeytar,
+  setPassword: setSessionPasswordToKeytar,
+  deletePassword: deleteSessionPasswordFromKeytar,
+};
 
 export function registerIpc() {
   registerHostKeyIpc();
@@ -99,23 +115,11 @@ export function registerIpc() {
   };
 
   ipcMain.handle('settings:get', async () => readSettings());
-  ipcMain.handle('settings:update', async (_, partial: Partial<AppSettings>) => {
+  ipcMain.handle('settings:update', async (_, partial: unknown) => {
     const current = readSettings();
-    const merged: AppSettings = {
-      ...current,
-      ...partial,
-      theme: { ...current.theme, ...(partial.theme || {}) },
-      behavior: { ...current.behavior, ...(partial.behavior || {}) },
-      ui: { ...current.ui, ...(partial.ui || {}) },
-    };
-    if ((merged.behavior.singleInstance ?? true) && !applySingleInstancePreference(true)) {
-      throw new Error('当前已有另一个实例占用单实例锁，无法启用单实例运行');
-    }
+    const merged = validateSettingsPatch(partial, current);
     await saveSettings(merged);
     const saved = readSettings();
-    if (!(merged.behavior.singleInstance ?? true)) {
-      applySingleInstancePreference(false);
-    }
     safeSend('settings:changed', saved);
     return saved;
   });
@@ -135,26 +139,33 @@ export function registerIpc() {
     return sharedState.mainWindow.isMaximized();
   });
   ipcMain.handle('window:close', () => sharedState.mainWindow?.close());
-  ipcMain.handle('clipboard:write-text', async (_, text: string) => {
-    clipboard.writeText(String(text || ''));
+  ipcMain.handle('clipboard:write-text', async (_, text: unknown) => {
+    clipboard.writeText(requireString(text, '剪贴板文本', 1024 * 1024, true));
     return true;
   });
-  ipcMain.handle('metrics:set-session', async (_, sessionId: number | null) => {
-    sharedState.metricsSessionId = sessionId;
+  ipcMain.handle('metrics:set-session', async (_, sessionIdInput: unknown) => {
+    sharedState.metricsSessionId = requireNullablePositiveId(sessionIdInput, '指标会话 ID');
     sharedState.metricsInactiveSent = false;
     return true;
   });
 
   ipcMain.handle('folder:list', async () => all('SELECT * FROM session_folder ORDER BY id ASC'));
-  ipcMain.handle('folder:create', async (_, payload: { name: string; parentId: number | null }) => {
-    await run('INSERT INTO session_folder(name, parent_id) VALUES(?, ?)', [payload.name, payload.parentId]);
+  ipcMain.handle('folder:create', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, '目录');
+    const name = requireString(payload.name, '目录名称', 128).trim();
+    const parentId = requireNullablePositiveId(payload.parentId, '父目录 ID');
+    await run('INSERT INTO session_folder(name, parent_id) VALUES(?, ?)', [name, parentId]);
     return true;
   });
-  ipcMain.handle('folder:update', async (_, payload: { id: number; name: string }) => {
-    await run('UPDATE session_folder SET name = ? WHERE id = ?', [payload.name, payload.id]);
+  ipcMain.handle('folder:update', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, '目录');
+    const id = requirePositiveId(payload.id, '目录 ID');
+    const name = requireString(payload.name, '目录名称', 128).trim();
+    await run('UPDATE session_folder SET name = ? WHERE id = ?', [name, id]);
     return true;
   });
-  ipcMain.handle('folder:delete', async (_, folderId: number) => {
+  ipcMain.handle('folder:delete', async (_, folderIdInput: unknown) => {
+    const folderId = requirePositiveId(folderIdInput, '目录 ID');
     const childFolderCount = await get<{ count: number }>(
       'SELECT COUNT(1) AS count FROM session_folder WHERE parent_id = ?',
       [folderId],
@@ -179,68 +190,20 @@ export function registerIpc() {
   });
   ipcMain.handle(
     'session:create',
-    async (_, payload: Omit<Session, 'id'>) => {
-      if (payload.default_session === 1) {
-        await run('UPDATE session SET default_session = 0');
-      }
-      await run(
-        `INSERT INTO session(folder_id, name, host, port, username, password, remember_password, default_session)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          payload.folder_id,
-          payload.name,
-          payload.host,
-          payload.port,
-          payload.username,
-          '',
-          payload.remember_password,
-          payload.default_session,
-        ],
-      );
-      const inserted = await get<{ id: number }>('SELECT last_insert_rowid() AS id');
-      const sessionId = Number(inserted?.id || 0);
-      if (sessionId > 0) {
-        const passwordValue = String(payload.password || '');
-        if (payload.remember_password === 1 && passwordValue.length > 0) {
-          await setSessionPasswordToKeytar(sessionId, passwordValue);
-        } else {
-          await deleteSessionPasswordFromKeytar(sessionId);
-        }
-      }
+    async (_, payloadInput: unknown) => {
+      const payload = parseSession(payloadInput, false);
+      await createSessionRecord(payload, sessionPersistenceDependencies);
       return true;
     },
   );
-  ipcMain.handle('session:update', async (_, payload: Session) => {
-    if (payload.default_session === 1) {
-      await run('UPDATE session SET default_session = 0');
-    }
-    await run(
-      `UPDATE session
-       SET folder_id = ?, name = ?, host = ?, port = ?, username = ?, password = ?, remember_password = ?, default_session = ?
-       WHERE id = ?`,
-      [
-        payload.folder_id,
-        payload.name,
-        payload.host,
-        payload.port,
-        payload.username,
-        '',
-        payload.remember_password,
-        payload.default_session,
-        payload.id,
-      ],
-    );
-    const passwordValue = String(payload.password || '');
-    if (payload.remember_password !== 1) {
-      await deleteSessionPasswordFromKeytar(payload.id);
-    } else if (passwordValue.length > 0) {
-      await setSessionPasswordToKeytar(payload.id, passwordValue);
-    }
+  ipcMain.handle('session:update', async (_, payloadInput: unknown) => {
+    const payload = parseSession(payloadInput, true);
+    await updateSessionRecord(payload, sessionPersistenceDependencies);
     return true;
   });
-  ipcMain.handle('session:delete', async (_, sessionId: number) => {
-    await run('DELETE FROM session WHERE id = ?', [sessionId]);
-    await deleteSessionPasswordFromKeytar(sessionId);
+  ipcMain.handle('session:delete', async (_, sessionIdInput: unknown) => {
+    const sessionId = requirePositiveId(sessionIdInput, '会话 ID');
+    await deleteSessionRecord(sessionId, sessionPersistenceDependencies);
     return true;
   });
 
@@ -248,11 +211,15 @@ export function registerIpc() {
     'ssh:connect',
     async (
       _,
-      payload: number | { sessionId: number; connectionId?: number; password?: string; savePassword?: boolean },
+      payloadInput: unknown,
     ) => {
-      const connectPayload = typeof payload === 'number' ? { sessionId: payload } : payload;
-      const profileSessionId = connectPayload.sessionId;
-      const connectionId = connectPayload.connectionId ?? profileSessionId;
+      const connectPayload = typeof payloadInput === 'number'
+        ? { sessionId: requirePositiveId(payloadInput, '会话 ID') }
+        : requireRecord(payloadInput, 'SSH 连接参数');
+      const profileSessionId = requirePositiveId(connectPayload.sessionId, '会话 ID');
+      const connectionId = connectPayload.connectionId == null
+        ? profileSessionId
+        : requirePositiveId(connectPayload.connectionId, '连接 ID');
       cancelPendingHostKeyRequests(connectionId);
       cancelPendingAuthChallenges(connectionId);
       const attempt = beginConnectionAttempt(connectionId);
@@ -262,8 +229,11 @@ export function registerIpc() {
         if (attempt.cancelled) throw new Error(SSH_CONNECT_CANCELLED);
         const session = await loadSession(profileSessionId);
         if (attempt.cancelled) throw new Error(SSH_CONNECT_CANCELLED);
-        const password = connectPayload.password ?? session.password;
-        const savePassword = !!connectPayload.savePassword && !!connectPayload.password;
+        const suppliedPassword = connectPayload.password == null
+          ? undefined
+          : requireString(connectPayload.password, '密码', 4096, true);
+        const password = suppliedPassword ?? session.password;
+        const savePassword = connectPayload.savePassword === true && !!suppliedPassword;
         return await new Promise<boolean>((resolve, reject) => {
        const client = new Client();
        attempt.client = client;
@@ -396,23 +366,28 @@ export function registerIpc() {
     },
   );
 
-  const writeSshInput = (payload: { sessionId: number; input: string }) => {
-    const state = sshStateMap.get(payload.sessionId);
+  const writeSshInput = (payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SSH 输入');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const input = requireString(payload.input, '终端输入', 64 * 1024, true);
+    const state = sshStateMap.get(sessionId);
     if (!state?.shell) throw new Error('SSH 未连接');
-    state.shell.write(payload.input);
+    state.shell.write(input);
     return true;
   };
-  ipcMain.on('ssh:input', (_, payload: { sessionId: number; input: string }) => {
+  ipcMain.on('ssh:input', (_, payload: unknown) => {
     writeSshInput(payload);
   });
-  ipcMain.handle('ssh:send', async (_, payload: { sessionId: number; input: string }) => {
+  ipcMain.handle('ssh:send', async (_, payload: unknown) => {
     return writeSshInput(payload);
   });
-  ipcMain.handle('ssh:resize', async (_, payload: { sessionId: number; cols: number; rows: number }) => {
-    const state = sshStateMap.get(payload.sessionId);
+  ipcMain.handle('ssh:resize', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, '终端尺寸');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const cols = requireIntegerInRange(payload.cols, '终端列数', 2, 1000);
+    const rows = requireIntegerInRange(payload.rows, '终端行数', 2, 1000);
+    const state = sshStateMap.get(sessionId);
     if (!state?.shell) return false;
-    const cols = Math.max(2, Number(payload.cols || 0));
-    const rows = Math.max(2, Number(payload.rows || 0));
     try {
       state.shell.setWindow(rows, cols, 0, 0);
       return true;
@@ -420,7 +395,8 @@ export function registerIpc() {
       return false;
     }
   });
-  ipcMain.handle('ssh:disconnect', async (_, sessionId: number) => {
+  ipcMain.handle('ssh:disconnect', async (_, sessionIdInput: unknown) => {
+    const sessionId = requirePositiveId(sessionIdInput, '连接 ID');
     cancelPendingHostKeyRequests(sessionId);
     cancelPendingAuthChallenges(sessionId);
     cancelPendingConnectionAttempt(sessionId);
@@ -428,7 +404,8 @@ export function registerIpc() {
     await cleanupConnectionState(sessionId);
     return true;
   });
-  ipcMain.handle('ssh:get-cwd', async (_, sessionId: number) => {
+  ipcMain.handle('ssh:get-cwd', async (_, sessionIdInput: unknown) => {
+    const sessionId = requirePositiveId(sessionIdInput, '连接 ID');
     const state = sshStateMap.get(sessionId);
     if (!state) return '';
     const cached = lastKnownCwdMap.get(sessionId);
@@ -440,24 +417,25 @@ export function registerIpc() {
     if (cached && cached.trim()) return cached.trim();
     return '';
   });
-  ipcMain.handle('ssh:get-cached-cwd', async (_, sessionId: number) => {
+  ipcMain.handle('ssh:get-cached-cwd', async (_, sessionIdInput: unknown) => {
+    const sessionId = requirePositiveId(sessionIdInput, '连接 ID');
     if (!sshStateMap.has(sessionId)) return '';
     return lastKnownCwdMap.get(sessionId)?.trim() || '';
   });
 
-  ipcMain.handle('sftp:list', async (_, payload: {
-    sessionId: number;
-    requestSequence: number;
-    path: string;
-    showHidden: boolean;
-  }) => {
-    requireConnected(payload.sessionId);
-    const session = await getSessionForConnection(payload.sessionId);
-    const client = await getOrCreateSftp(payload.sessionId, session);
-    const targetPath = await resolveRemotePath(client, payload.path);
+  ipcMain.handle('sftp:list', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 列表参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const requestSequence = requireIntegerInRange(payload.requestSequence, '请求序号', 0, Number.MAX_SAFE_INTEGER);
+    const remotePath = requirePath(payload.path, '远程路径');
+    const showHidden = requireBoolean(payload.showHidden, '显示隐藏文件');
+    requireConnected(sessionId);
+    const session = await getSessionForConnection(sessionId);
+    const client = await getOrCreateSftp(sessionId, session);
+    const targetPath = await resolveRemotePath(client, remotePath);
     const list = await client.list(targetPath);
     const items = list
-      .filter((item: { name: string }) => payload.showHidden || !item.name.startsWith('.'))
+      .filter((item: { name: string }) => showHidden || !item.name.startsWith('.'))
       .map((item: any) => ({
         type: item.type,
         name: item.name,
@@ -475,51 +453,65 @@ export function registerIpc() {
         if (aDir !== bDir) return aDir - bDir;
         return a.name.localeCompare(b.name, 'zh-Hans-CN', { sensitivity: 'base', numeric: true });
       });
-    return { sessionId: payload.sessionId, requestSequence: payload.requestSequence, items };
+    return { sessionId, requestSequence, items };
   });
-  ipcMain.handle('sftp:home', async (_, sessionId: number) => {
+  ipcMain.handle('sftp:home', async (_, sessionIdInput: unknown) => {
+    const sessionId = requirePositiveId(sessionIdInput, '连接 ID');
     requireConnected(sessionId);
     const session = await getSessionForConnection(sessionId);
     const client = await getOrCreateSftp(sessionId, session);
     const cwd = await client.cwd().catch(() => '~');
     return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : '~';
   });
-  ipcMain.handle('sftp:mkdir', async (_, payload: { sessionId: number; path: string }) => {
-    requireConnected(payload.sessionId);
-    const session = await getSessionForConnection(payload.sessionId);
-    const client = await getOrCreateSftp(payload.sessionId, session);
-    const targetPath = await resolveRemotePath(client, payload.path);
+  ipcMain.handle('sftp:mkdir', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 创建目录参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const remotePath = requirePath(payload.path, '远程路径');
+    requireConnected(sessionId);
+    const session = await getSessionForConnection(sessionId);
+    const client = await getOrCreateSftp(sessionId, session);
+    const targetPath = await resolveRemotePath(client, remotePath);
     await client.mkdir(targetPath, true);
     return true;
   });
-  ipcMain.handle('sftp:rename', async (_, payload: { sessionId: number; from: string; to: string }) => {
-    requireConnected(payload.sessionId);
-    const session = await getSessionForConnection(payload.sessionId);
-    const client = await getOrCreateSftp(payload.sessionId, session);
-    const fromPath = await resolveRemotePath(client, payload.from);
-    const toPath = await resolveRemotePath(client, payload.to);
+  ipcMain.handle('sftp:rename', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 重命名参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    requireConnected(sessionId);
+    const session = await getSessionForConnection(sessionId);
+    const client = await getOrCreateSftp(sessionId, session);
+    const fromPath = await resolveRemotePath(client, requirePath(payload.from, '源路径'));
+    const toPath = await resolveRemotePath(client, requirePath(payload.to, '目标路径'));
     await client.rename(fromPath, toPath);
     return true;
   });
-  ipcMain.handle('sftp:delete', async (_, payload: { sessionId: number; path: string; isDir: boolean }) => {
-    requireConnected(payload.sessionId);
-    const session = await getSessionForConnection(payload.sessionId);
-    const client = await getOrCreateSftp(payload.sessionId, session);
-    const targetPath = await resolveRemotePath(client, payload.path);
-    if (payload.isDir) await client.rmdir(targetPath, true);
+  ipcMain.handle('sftp:delete', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 删除参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const isDir = requireBoolean(payload.isDir, '目录标记');
+    requireConnected(sessionId);
+    const session = await getSessionForConnection(sessionId);
+    const client = await getOrCreateSftp(sessionId, session);
+    const targetPath = await resolveRemotePath(client, requirePath(payload.path, '远程路径'));
+    if (isDir) await client.rmdir(targetPath, true);
     else await client.delete(targetPath);
     return true;
   });
-  ipcMain.handle('sftp:upload', async (_, payload: { sessionId: number; remoteDir: string }) => {
+  ipcMain.handle('sftp:upload', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 上传参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const remoteDir = requirePath(payload.remoteDir, '远程目录');
     const picked = await dialog.showOpenDialog({ properties: ['openFile', 'openDirectory'] });
     if (picked.canceled || picked.filePaths.length === 0) return false;
-    return runSftpUploadBatch({ sessionId: payload.sessionId, remoteDir: payload.remoteDir, localPaths: [picked.filePaths[0]] });
+    return runSftpUploadBatch({ sessionId, remoteDir, localPaths: [picked.filePaths[0]] });
   });
-  ipcMain.handle('sftp:download', async (_, payload: { sessionId: number; remotePath: string }) => {
-    requireConnected(payload.sessionId);
-    const session = await getSessionForConnection(payload.sessionId);
-    const client = await getOrCreateSftp(payload.sessionId, session);
-    const remotePath = await resolveRemotePath(client, payload.remotePath);
+  ipcMain.handle('sftp:download', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 下载参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    requireConnected(sessionId);
+    const session = await getSessionForConnection(sessionId);
+    const client = await getOrCreateSftp(sessionId, session);
+    const remotePath = await resolveRemotePath(client, requirePath(payload.remotePath, '远程路径'));
     const fileName = path.basename(remotePath.replace(/\/+$/, '')) || path.basename(remotePath);
     const downloadDir = getDefaultDownloadDir();
     await fs.promises.mkdir(downloadDir, { recursive: true });
@@ -540,25 +532,40 @@ export function registerIpc() {
     }
     return true;
   });
-  ipcMain.handle('sftp:upload-batch', async (_, payload: { sessionId: number; remoteDir: string; localPaths?: string[] }) => {
-    let localPaths = payload.localPaths || [];
-    if (!localPaths.length) {
+  ipcMain.handle('sftp:authorize-upload', async (event, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, '上传授权参数');
+    return createUploadCapability(event.sender.id, requireStringArray(payload.localPaths, '本地路径', 100));
+  });
+  ipcMain.handle('sftp:upload-batch', async (event, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 批量上传参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const remoteDir = requirePath(payload.remoteDir, '远程目录');
+    let localPaths: string[];
+    if (payload.uploadCapability) {
+      localPaths = consumeUploadCapability(payload.uploadCapability, event.sender.id);
+    } else {
       const picked = await dialog.showOpenDialog({ properties: ['openFile', 'openDirectory', 'multiSelections'] });
       if (picked.canceled || picked.filePaths.length === 0) return false;
       localPaths = picked.filePaths;
     }
-    return runSftpUploadBatch({ sessionId: payload.sessionId, remoteDir: payload.remoteDir, localPaths });
+    return runSftpUploadBatch({ sessionId, remoteDir, localPaths });
   });
-  ipcMain.handle('sftp:download-batch', async (_, payload: { sessionId: number; remotePaths: string[]; localDir?: string }) => {
-    if (!payload.remotePaths.length) return false;
-    const localDir = payload.localDir || getDefaultDownloadDir();
+  ipcMain.handle('sftp:download-batch', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 批量下载参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const remotePaths = requireStringArray(payload.remotePaths, '远程路径', 1000);
+    if (!remotePaths.length) return false;
+    const localDir = payload.localDir == null ? getDefaultDownloadDir() : requirePath(payload.localDir, '本地目录');
     await fs.promises.mkdir(localDir, { recursive: true });
-    const ok = await runSftpDownloadBatch({ sessionId: payload.sessionId, remotePaths: payload.remotePaths, localDir });
+    const ok = await runSftpDownloadBatch({ sessionId, remotePaths, localDir });
     return ok;
   });
-  ipcMain.handle('sftp:cancel-batch', async (_, payload: { sessionId: number; batchId: string }) => {
-    const batch = sftpBatchControlMap.get(payload.batchId);
-    if (!batch || batch.sessionId !== payload.sessionId) return false;
+  ipcMain.handle('sftp:cancel-batch', async (_, payloadInput: unknown) => {
+    const payload = requireRecord(payloadInput, 'SFTP 取消参数');
+    const sessionId = requirePositiveId(payload.sessionId, '连接 ID');
+    const batchId = requireString(payload.batchId, '批次 ID', 128);
+    const batch = sftpBatchControlMap.get(batchId);
+    if (!batch || batch.sessionId !== sessionId) return false;
     batch.cancelled = true;
     const clients = new Set<any>([...(batch.clients || []), ...(batch.client ? [batch.client] : [])]);
     if (batch.ownsClient) await Promise.all(Array.from(clients, async (client) => client.end().catch(() => null)));
@@ -566,7 +573,8 @@ export function registerIpc() {
     batch.clients = [];
     return true;
   });
-  ipcMain.handle('dialog:pick-directory', async (_, defaultPath?: string) => {
+  ipcMain.handle('dialog:pick-directory', async (_, defaultPathInput?: unknown) => {
+    const defaultPath = defaultPathInput == null ? undefined : requireString(defaultPathInput, '默认目录', 4096, true);
     const picked = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
       defaultPath: defaultPath && defaultPath.trim() ? defaultPath : undefined,

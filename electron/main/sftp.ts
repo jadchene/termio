@@ -1,13 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
-import { Client } from 'ssh2';
 import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 import { Session, SftpProgressPayload, SftpBatchControl, UploadTask, DownloadTask } from './types';
-import { all, get } from './db';
 import { readSettings } from './settings';
 import { sshStateMap, sftpMap, sftpBatchControlMap, sftpProgressThrottleMap, DEFAULT_TRANSFER_CONCURRENCY, connectionHomeMap } from './state';
 import { getSessionForConnection, requireConnected } from './session';
@@ -180,26 +175,55 @@ export function isSftpDir(attrs: any): boolean {
   return false;
 }
 
+const MAX_TRANSFER_TASKS = 10_000;
+const MAX_TRANSFER_ENTRIES = 20_000;
+const MAX_SINGLE_FILE_BYTES = 100 * 1024 * 1024 * 1024;
+const MAX_TOTAL_TRANSFER_BYTES = 500 * 1024 * 1024 * 1024;
+const MAX_TRANSFER_DEPTH = 64;
+
+type TransferBudget = {
+  entries: number;
+  totalBytes: number;
+};
+
+function addTransferTask<T extends { size: number }>(tasks: T[], task: T, budget: TransferBudget): void {
+  if (!Number.isSafeInteger(task.size) || task.size < 0 || task.size > MAX_SINGLE_FILE_BYTES) {
+    throw new Error('单个传输文件大小超过限制');
+  }
+  if (tasks.length >= MAX_TRANSFER_TASKS) throw new Error(`单次传输最多包含 ${MAX_TRANSFER_TASKS} 个文件`);
+  if (budget.totalBytes + task.size > MAX_TOTAL_TRANSFER_BYTES) throw new Error('单次传输总大小超过限制');
+  budget.totalBytes += task.size;
+  tasks.push(task);
+}
+
+function countTransferEntry(budget: TransferBudget, depth: number): void {
+  if (depth > MAX_TRANSFER_DEPTH) throw new Error('传输目录层级超过限制');
+  budget.entries += 1;
+  if (budget.entries > MAX_TRANSFER_ENTRIES) throw new Error(`单次传输最多遍历 ${MAX_TRANSFER_ENTRIES} 个目录项`);
+}
+
 export async function collectUploadTasks(
   localPath: string,
   remoteDir: string,
   tasks: UploadTask[],
   shouldCancel?: () => boolean,
+  budget: TransferBudget = { entries: 0, totalBytes: 0 },
 ) {
   if (shouldCancel?.()) throw new SftpBatchCancelledError();
   const stat = await fs.promises.stat(localPath);
   if (!stat.isDirectory()) {
-    tasks.push({
+    addTransferTask(tasks, {
       localPath,
       remotePath: buildRemotePath(remoteDir, path.basename(localPath)),
       name: path.basename(localPath),
       size: stat.size,
-    });
+    }, budget);
     return;
   }
 
   const rootRemoteDir = buildRemotePath(remoteDir, path.basename(localPath));
-  const walk = async (currentLocalDir: string, currentRemoteDir: string) => {
+  const walk = async (currentLocalDir: string, currentRemoteDir: string, depth: number) => {
+    countTransferEntry(budget, depth);
     if (shouldCancel?.()) throw new SftpBatchCancelledError();
     const entries = await fs.promises.readdir(currentLocalDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -207,21 +231,21 @@ export async function collectUploadTasks(
       const localChild = path.join(currentLocalDir, entry.name);
       const remoteChild = buildRemotePath(currentRemoteDir, entry.name);
       if (entry.isDirectory()) {
-        await walk(localChild, remoteChild);
+        await walk(localChild, remoteChild, depth + 1);
         continue;
       }
       if (!entry.isFile()) continue;
       const fileStat = await fs.promises.stat(localChild);
-      tasks.push({
+      addTransferTask(tasks, {
         localPath: localChild,
         remotePath: remoteChild,
         name: path.relative(localPath, localChild).replace(/\\/g, '/'),
         size: fileStat.size,
-      });
+      }, budget);
     }
   };
 
-  await walk(localPath, rootRemoteDir);
+  await walk(localPath, rootRemoteDir, 0);
 }
 
 export async function ensureRemoteDirExists(client: any, remoteDir: string): Promise<void> {
@@ -286,7 +310,10 @@ export async function collectDownloadTasks(
   displayRootName: string,
   reservedPaths: Set<string>,
   shouldCancel?: () => boolean,
+  budget: TransferBudget = { entries: 0, totalBytes: 0 },
+  depth = 0,
 ) {
+  countTransferEntry(budget, depth);
   if (shouldCancel?.()) throw new SftpBatchCancelledError();
   const attrs = await client.stat(remotePath);
   const normalizedCurrent = remotePath.replace(/\/+$/, '');
@@ -296,12 +323,12 @@ export async function collectDownloadTasks(
     : '';
   const displayName = rel ? `${displayRootName}/${rel}` : displayRootName;
   if (!isSftpDir(attrs)) {
-    tasks.push({
+    addTransferTask(tasks, {
       remotePath,
       localPath,
       name: displayName,
       size: Number(attrs?.size || 0),
-    });
+    }, budget);
     return;
   }
 
@@ -322,15 +349,17 @@ export async function collectDownloadTasks(
         displayRootName,
         reservedPaths,
         shouldCancel,
+        budget,
+        depth + 1,
       );
       continue;
     }
-    tasks.push({
+    addTransferTask(tasks, {
       remotePath: childRemote,
       localPath: childLocal,
       name: `${displayRootName}/${childRemote.replace(/\/+$/, '').slice(normalizedRoot.length + 1)}`,
       size: Number(item.size || 0),
-    });
+    }, budget);
   }
 }
 
@@ -435,13 +464,14 @@ export async function runSftpUploadBatch(payload: { sessionId: number; remoteDir
     true,
   );
   const tasks: UploadTask[] = [];
+  const transferBudget: TransferBudget = { entries: 0, totalBytes: 0 };
   let successCount = 0;
   let failedCount = 0;
   let completedCount = 0;
   try {
     for (const localPath of payload.localPaths) {
       assertBatchNotCancelled(control);
-      await collectUploadTasks(localPath, remoteDir, tasks, () => control.cancelled);
+      await collectUploadTasks(localPath, remoteDir, tasks, () => control.cancelled, transferBudget);
     }
     assertBatchNotCancelled(control);
     if (tasks.length > 0) {
@@ -607,6 +637,7 @@ export async function runSftpDownloadBatch(payload: { sessionId: number; remoteP
   );
   const targetDir = payload.localDir || app.getPath('downloads');
   const tasks: DownloadTask[] = [];
+  const transferBudget: TransferBudget = { entries: 0, totalBytes: 0 };
   const reservedPaths = new Set<string>();
   let successCount = 0;
   let failedCount = 0;
@@ -627,6 +658,7 @@ export async function runSftpDownloadBatch(payload: { sessionId: number; remoteP
         fileName,
         reservedPaths,
         () => control.cancelled,
+        transferBudget,
       );
     }
     assertBatchNotCancelled(control);

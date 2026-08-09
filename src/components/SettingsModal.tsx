@@ -130,9 +130,6 @@ export const SettingsModal = (props: SettingsModalProps) => {
     <div className="settings-scroll">
       <SettingGroup title="会话行为">
         <Form {...settingsFormLayout}>
-          <Form.Item label="单实例运行">
-            <Switch checked={draft.behavior.singleInstance} onChange={(checked) => updateBehavior({ singleInstance: checked })} />
-          </Form.Item>
           <Form.Item label="选中自动复制">
             <Switch checked={draft.behavior.autoCopySelection} onChange={(checked) => updateBehavior({ autoCopySelection: checked })} />
           </Form.Item>

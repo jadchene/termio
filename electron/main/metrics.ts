@@ -1,13 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import path from 'node:path';
-import fs from 'node:fs';
-import os from 'node:os';
-import { Client } from 'ssh2';
-import SftpClient from 'ssh2-sftp-client';
-import sqlite3 from 'sqlite3';
-import keytar from 'keytar';
 import { RemoteMetricsPayload } from './types';
-import { get } from './db';
 import { sshStateMap, remoteMetricsSnapshotMap, remoteMetricsPayloadMap, METRICS_FULL_SAMPLE_INTERVAL_MS, sharedState } from './state';
 import { safeSend } from './window';
 import { CappedMetricsOutput } from './metricsOutput';

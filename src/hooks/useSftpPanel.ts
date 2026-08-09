@@ -173,41 +173,6 @@ export function useSftpPanel(params: UseSftpPanelParams) {
     updateSessionState(sessionId, (current) => ({ ...current, items: [] }));
   }, [updateSessionState]);
 
-  const getLocalPathsFromDrop = useCallback((event: React.DragEvent): string[] => {
-    const files = Array.from(event.dataTransfer.files || []);
-    const fromFiles = files
-      .map((file: File & { path?: string }) => {
-        const directPath = String(file?.path || '');
-        if (directPath) return directPath;
-        try {
-          return String(window.terminalApi.getPathForDroppedFile(file) || '');
-        } catch {
-          return '';
-        }
-      })
-      .filter((it) => !!it);
-    const fromUriList = (event.dataTransfer.getData('text/uri-list') || '')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => !!line && !line.startsWith('#'))
-      .map((line) => {
-        if (!line.toLowerCase().startsWith('file://')) return '';
-        try {
-          const decoded = decodeURIComponent(line.replace(/^file:\/\//i, ''));
-          if (/^\/[a-zA-Z]:\//.test(decoded)) return decoded.slice(1).replace(/\//g, '\\');
-          return decoded.replace(/\//g, '\\');
-        } catch {
-          return '';
-        }
-      })
-      .filter((it) => !!it);
-    const fromPlainText = (event.dataTransfer.getData('text/plain') || '')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => /^[a-zA-Z]:\\/.test(line) || /^\\\\/.test(line));
-    return Array.from(new Set([...fromFiles, ...fromUriList, ...fromPlainText]));
-  }, []);
-
   const submitSftpPath = useCallback(async () => {
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return;
@@ -256,7 +221,6 @@ export function useSftpPanel(params: UseSftpPanelParams) {
     clearSftpSelectionNow,
     clearSftpSelection,
     clearSftpItems,
-    getLocalPathsFromDrop,
     submitSftpPath,
   };
 }

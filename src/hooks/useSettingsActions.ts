@@ -95,7 +95,6 @@ export function useSettingsActions(params: UseSettingsActionsParams) {
       },
       behavior: {
         ...settingsDraft.behavior,
-        singleInstance: settingsDraft.behavior.singleInstance ?? true,
         autoSwitchEnglishInputMethod: settingsDraft.behavior.autoSwitchEnglishInputMethod ?? false,
       },
     };

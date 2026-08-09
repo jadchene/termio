@@ -259,7 +259,6 @@ export default function App() {
     clearSftpSelectionNow,
     clearSftpSelection,
     clearSftpItems,
-    getLocalPathsFromDrop,
     submitSftpPath,
   } = useSftpPanel({
     activeSessionId,
@@ -433,7 +432,6 @@ export default function App() {
     navigateSftp,
     getCurrentSftpLocation,
     clearSftpSelectionNow,
-    getLocalPathsFromDrop,
     submitSftpPath,
     setSftpSelection,
     showAlert,

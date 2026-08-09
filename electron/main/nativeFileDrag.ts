@@ -400,12 +400,30 @@ function launchNativeDrag(state: NativeDragState): void {
   state.child = child;
   let stdoutBuffer = '';
   let stderrBuffer = '';
+  const maxStdoutLineLength = 64 * 1024;
+  const maxStderrLength = 256 * 1024;
+  const helperTimeout = setTimeout(() => {
+    if (state.child !== child) return;
+    state.helperError = 'Windows 拖拽辅助程序运行超时';
+    child.kill();
+  }, 12 * 60 * 60 * 1000);
+  helperTimeout.unref();
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {
     stdoutBuffer += chunk;
+    if (stdoutBuffer.length > maxStdoutLineLength && !stdoutBuffer.includes('\n')) {
+      state.helperError = 'Windows 拖拽辅助程序输出了超长协议行';
+      child.kill();
+      return;
+    }
     while (true) {
       const lineEnd = stdoutBuffer.indexOf('\n');
       if (lineEnd < 0) break;
+      if (lineEnd > maxStdoutLineLength) {
+        state.helperError = 'Windows 拖拽辅助程序输出了超长协议行';
+        child.kill();
+        return;
+      }
       const line = stdoutBuffer.slice(0, lineEnd).replace(/\r$/, '');
       stdoutBuffer = stdoutBuffer.slice(lineEnd + 1);
       if (line) handleHelperLine(state, line);
@@ -413,12 +431,13 @@ function launchNativeDrag(state: NativeDragState): void {
   });
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk: string) => {
-    stderrBuffer += chunk;
+    stderrBuffer = (stderrBuffer + chunk).slice(-maxStderrLength);
   });
   child.on('error', (error) => {
     state.helperError = String(error);
   });
   child.on('close', (code) => {
+    clearTimeout(helperTimeout);
     if (!state.cancelled && code && !state.helperError) {
       state.helperError = stderrBuffer.trim() || `Windows 拖拽辅助程序异常退出 (${code})`;
     }
