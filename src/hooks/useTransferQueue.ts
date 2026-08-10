@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { SftpTransferBatchResult, SftpTransferError, SftpTransferProgress } from '../types';
 import { formatSftpError } from '../utils/sftpError';
-import { calculateSftpTransferPercent } from '../utils/sftpTransferProgress';
+import { calculateSftpTransferPercent, finalizeSftpTransferProgress } from '../utils/sftpTransferProgress';
 
 export type TransferRow = {
   key: string;
@@ -98,8 +98,8 @@ export function useTransferQueue(params: UseTransferQueueParams) {
       }, 1200);
       return;
     }
-    setTransferRows((prev) => prev.filter((it) => !(it.sessionId === event.sessionId && it.batchId === event.batchId)));
     if (event.failedCount > 0) {
+      setTransferRows((prev) => prev.filter((it) => !(it.sessionId === event.sessionId && it.batchId === event.batchId)));
       const actionText = event.direction === 'upload' ? '上传' : '下载';
       const lines = failedItems.slice(0, 8).map((it, idx) =>
         `${idx + 1}. ${it.name}: ${formatSftpError({ code: it.errorCode, message: it.error })}`,
@@ -111,7 +111,21 @@ export function useTransferQueue(params: UseTransferQueueParams) {
         `${actionText}完成，但有失败文件。\n成功 ${event.successCount} / 总计 ${event.totalCount}，失败 ${event.failedCount}${details}${more}`,
         'SFTP 传输结果',
       );
+      return;
     }
+    setTransferRows((prev) =>
+      prev.map((it) => {
+        if (it.sessionId !== event.sessionId || it.batchId !== event.batchId) return it;
+        return {
+          ...it,
+          ...finalizeSftpTransferProgress(it),
+          status: 'done',
+        };
+      }),
+    );
+    setTimeout(() => {
+      setTransferRows((prev) => prev.filter((it) => !(it.sessionId === event.sessionId && it.batchId === event.batchId)));
+    }, 900);
   };
 
   const markTransferError = (event: SftpTransferError) => {
@@ -128,7 +142,10 @@ export function useTransferQueue(params: UseTransferQueueParams) {
   };
 
   const cancelTransferRow = async (row: TransferRow) => {
-    if (row.status === 'cancelled') return;
+    if (row.status !== 'running') {
+      setTransferRows((prev) => prev.filter((it) => !(it.sessionId === row.sessionId && it.batchId === row.batchId)));
+      return;
+    }
     const batchKey = `${row.sessionId}:${row.batchId}`;
     cancelledTransferBatchRef.current.add(batchKey);
     transferErrorsRef.current.delete(batchKey);

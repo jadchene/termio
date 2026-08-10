@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateSftpTransferPercent } from '../src/utils/sftpTransferProgress';
+import { calculateSftpTransferPercent, finalizeSftpTransferProgress } from '../src/utils/sftpTransferProgress';
 
 test('multiple-file SFTP progress uses completed item count', () => {
   assert.equal(calculateSftpTransferPercent({
@@ -24,4 +24,19 @@ test('single-file SFTP progress keeps byte-based percentage', () => {
     transferred: 25,
     total: 100,
   }), 25);
+});
+
+test('completed SFTP progress reaches 100 before the row is removed', () => {
+  assert.deepEqual(finalizeSftpTransferProgress({
+    totalCount: 1,
+    completedCount: 0,
+    transferred: 63,
+    total: 100,
+  }), {
+    totalCount: 1,
+    completedCount: 1,
+    transferred: 100,
+    total: 100,
+    percent: 100,
+  });
 });

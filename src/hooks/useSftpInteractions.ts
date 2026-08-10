@@ -268,10 +268,10 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onDownloadSftpMenu = async (menu: SftpMenuPayload) => {
+    setTreeMenu(null);
     clearSftpSelectionNow();
     await runSftpAction(async () => {
       await window.terminalApi.sftpDownloadBatch({ sessionId: menu.sessionId, remotePaths: [menu.path] });
-      setTreeMenu(null);
     });
   };
 
