@@ -511,7 +511,7 @@ export default function App() {
           colorBgElevated: isDark ? '#080808' : '#ffffff',
           colorBorder: isDark ? '#2a2a2a' : '#d9dfe8',
           borderRadius: 6,
-          fontFamily: settings.theme.uiFontFamily,
+          fontFamily: 'MiSans, sans-serif',
           fontSize: settings.theme.uiFontSize || 13,
         },
       }}
@@ -522,7 +522,7 @@ export default function App() {
           '--bg': terminalTheme.background,
           '--fg': terminalTheme.foreground,
           '--sidebar-width': `${resolvedSidebarWidth}px`,
-          '--ui-font-family': settings.theme.uiFontFamily,
+          '--ui-font-family': 'MiSans, sans-serif',
           '--ui-font-size': `${settings.theme.uiFontSize || 13}px`,
         } as CSSProperties
       }

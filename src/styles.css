@@ -1,5 +1,13 @@
+@font-face {
+  font-family: "MiSans";
+  src: url("./assets/fonts/MiSans-Medium.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
 :root {
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family: "MiSans", sans-serif;
   color-scheme: dark;
   background: #000;
 }
