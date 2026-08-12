@@ -1,6 +1,5 @@
 import { flushSync } from 'react-dom';
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import type { SftpItem } from '../types';
 import { formatSftpError, isSilentSftpError } from '../utils/sftpError';
 import { isLatestSessionRequest } from '../utils/requestSequence';
 import {

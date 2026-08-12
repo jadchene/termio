@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { SftpTransferBatchResult, SftpTransferError, SftpTransferProgress } from '../types';
 import { formatSftpError } from '../utils/sftpError';
-import { calculateSftpTransferPercent, finalizeSftpTransferProgress } from '../utils/sftpTransferProgress';
+import { calculateSftpTransferPercent, finalizeSftpTransferProgress, sftpTransferBatchKey } from '../utils/sftpTransferProgress';
 
 export type TransferRow = {
   key: string;
@@ -33,9 +33,9 @@ export function useTransferQueue(params: UseTransferQueueParams) {
     status === 'cancelled' || status === 'error' ? status : 'running';
 
   const updateTransferRow = (event: SftpTransferProgress) => {
-    const batchKey = `${event.sessionId}:${event.batchId}`;
+    const batchKey = sftpTransferBatchKey(event.sessionId, event.batchId);
     if (cancelledTransferBatchRef.current.has(batchKey)) return;
-    const key = `session-${event.sessionId}`;
+    const key = batchKey;
     const percent = calculateSftpTransferPercent(event);
     setTransferRows((prev) => {
       const found = prev.find((it) => it.key === key);
@@ -77,7 +77,7 @@ export function useTransferQueue(params: UseTransferQueueParams) {
   };
 
   const markTransferBatchComplete = async (event: SftpTransferBatchResult) => {
-    const batchKey = `${event.sessionId}:${event.batchId}`;
+    const batchKey = sftpTransferBatchKey(event.sessionId, event.batchId);
     const failedItems = transferErrorsRef.current.get(batchKey) || [];
     transferErrorsRef.current.delete(batchKey);
     if (cancelledTransferBatchRef.current.has(batchKey)) {
@@ -129,7 +129,7 @@ export function useTransferQueue(params: UseTransferQueueParams) {
   };
 
   const markTransferError = (event: SftpTransferError) => {
-    const batchKey = `${event.sessionId}:${event.batchId}`;
+    const batchKey = sftpTransferBatchKey(event.sessionId, event.batchId);
     if (cancelledTransferBatchRef.current.has(batchKey)) return;
     const list = transferErrorsRef.current.get(batchKey) || [];
     if (list.length < 50) {
@@ -146,7 +146,7 @@ export function useTransferQueue(params: UseTransferQueueParams) {
       setTransferRows((prev) => prev.filter((it) => !(it.sessionId === row.sessionId && it.batchId === row.batchId)));
       return;
     }
-    const batchKey = `${row.sessionId}:${row.batchId}`;
+    const batchKey = sftpTransferBatchKey(row.sessionId, row.batchId);
     cancelledTransferBatchRef.current.add(batchKey);
     transferErrorsRef.current.delete(batchKey);
     if (cancelledTransferBatchRef.current.size > 200) {

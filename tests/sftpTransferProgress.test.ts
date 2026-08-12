@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateSftpTransferPercent, finalizeSftpTransferProgress } from '../src/utils/sftpTransferProgress';
+import { calculateSftpTransferPercent, finalizeSftpTransferProgress, sftpTransferBatchKey } from '../src/utils/sftpTransferProgress';
+
+test('concurrent SFTP batches in one session have independent row keys', () => {
+  assert.notEqual(sftpTransferBatchKey(7, 'upload-a'), sftpTransferBatchKey(7, 'download-b'));
+  assert.equal(sftpTransferBatchKey(7, 'upload-a'), '7:upload-a');
+});
 
 test('multiple-file SFTP progress uses completed item count', () => {
   assert.equal(calculateSftpTransferPercent({

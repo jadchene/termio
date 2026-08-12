@@ -511,7 +511,7 @@ export default function App() {
           colorBgElevated: isDark ? '#080808' : '#ffffff',
           colorBorder: isDark ? '#2a2a2a' : '#d9dfe8',
           borderRadius: 6,
-          fontFamily: 'MiSans, sans-serif',
+          fontFamily: settings.theme.uiFontFamily,
           fontSize: settings.theme.uiFontSize || 13,
         },
       }}
@@ -522,7 +522,7 @@ export default function App() {
           '--bg': terminalTheme.background,
           '--fg': terminalTheme.foreground,
           '--sidebar-width': `${resolvedSidebarWidth}px`,
-          '--ui-font-family': 'MiSans, sans-serif',
+          '--ui-font-family': settings.theme.uiFontFamily,
           '--ui-font-size': `${settings.theme.uiFontSize || 13}px`,
         } as CSSProperties
       }
@@ -591,14 +591,12 @@ export default function App() {
         sessionForm={sessionForm}
         showSessionPassword={showSessionPassword}
         sessionFolderMenuOpen={sessionFolderMenuOpen}
-        sessionFolderMenuRef={sessionFolderMenuRef}
         folderTreeData={folderTreeData}
         setSessionForm={setSessionForm}
         showFolderModal={showFolderModal}
         folderName={folderName}
         folderParent={folderParent}
         folderParentMenuOpen={folderParentMenuOpen}
-        folderParentMenuRef={folderParentMenuRef}
         setFolderName={setFolderName}
         showSettings={showSettings}
         settingsDraft={settingsDraft}

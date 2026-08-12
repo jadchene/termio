@@ -1,5 +1,4 @@
 import { Button, Form, Input, Modal, TreeSelect } from 'antd';
-import type { RefObject } from 'react';
 import type { FolderTreeOption } from '../hooks/useFolderTreeOptions';
 
 type FolderModalProps = {
@@ -7,7 +6,6 @@ type FolderModalProps = {
   folderName: string;
   folderParent: number | null;
   folderParentMenuOpen: boolean;
-  folderParentMenuRef: RefObject<HTMLDivElement | null>;
   folderTreeData: FolderTreeOption[];
   onChangeName: (value: string) => void;
   onToggleParentMenu: () => void;
@@ -22,7 +20,6 @@ export const FolderModal = (props: FolderModalProps) => {
     folderName,
     folderParent,
     folderParentMenuOpen,
-    folderParentMenuRef,
     folderTreeData,
     onChangeName,
     onToggleParentMenu,

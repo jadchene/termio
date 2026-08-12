@@ -9,6 +9,8 @@ type CompletedTransferProgress = TransferProgress & {
   percent: number;
 };
 
+export const sftpTransferBatchKey = (sessionId: number, batchId: string): string => `${sessionId}:${batchId}`;
+
 export const calculateSftpTransferPercent = (progress: TransferProgress): number => {
   const ratio = progress.totalCount > 1
     ? progress.completedCount / progress.totalCount

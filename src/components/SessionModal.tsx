@@ -1,6 +1,5 @@
 import { EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Checkbox, Form, Input, InputNumber, Modal, TreeSelect } from 'antd';
-import type { RefObject } from 'react';
 import type { FolderTreeOption } from '../hooks/useFolderTreeOptions';
 import type { Session } from '../types';
 
@@ -12,7 +11,6 @@ type SessionModalProps = {
   form: SessionForm;
   showPassword: boolean;
   folderMenuOpen: boolean;
-  folderMenuRef: RefObject<HTMLDivElement | null>;
   folderTreeData: FolderTreeOption[];
   onChangeForm: (next: SessionForm) => void;
   onTogglePassword: () => void;
@@ -29,7 +27,6 @@ export const SessionModal = (props: SessionModalProps) => {
     form,
     showPassword,
     folderMenuOpen,
-    folderMenuRef,
     folderTreeData,
     onChangeForm,
     onTogglePassword,
