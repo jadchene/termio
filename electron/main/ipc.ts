@@ -40,6 +40,7 @@ import {
   cancelPendingConnectionAttempt,
   releaseConnectionAttempt,
 } from './connectionAttempt';
+import { SshDataBuffer } from './sshDataBuffer';
 
 const ipcMain = {
   handle: (
@@ -56,8 +57,6 @@ const ipcMain = {
   on: registerTrustedOn,
 };
 
-const SSH_DATA_FLUSH_DELAY_MS = 4;
-const MAX_SSH_DATA_IPC_CHUNK = 64 * 1024;
 const sessionPersistenceDependencies = {
   withTransaction,
   getPassword: getSessionPasswordFromKeytar,
@@ -69,50 +68,10 @@ export function registerIpc() {
   registerHostKeyIpc();
   registerAuthChallengeIpc();
   registerNativeFileDragIpc();
-  const sshDataBufferMap = new Map<number, string>();
-  const sshDataTimerMap = new Map<number, ReturnType<typeof setTimeout>>();
-  const flushSshData = (connectionId: number, flushAll = false) => {
-    const timer = sshDataTimerMap.get(connectionId);
-    if (timer) {
-      clearTimeout(timer);
-      sshDataTimerMap.delete(connectionId);
-    }
-    const data = sshDataBufferMap.get(connectionId);
-    if (!data) return;
-    if (data.length <= MAX_SSH_DATA_IPC_CHUNK) {
-      sshDataBufferMap.delete(connectionId);
-      safeSend('ssh:data', { sessionId: connectionId, data });
-      return;
-    }
-    if (flushAll) {
-      sshDataBufferMap.delete(connectionId);
-      for (let start = 0; start < data.length; start += MAX_SSH_DATA_IPC_CHUNK) {
-        safeSend('ssh:data', {
-          sessionId: connectionId,
-          data: data.slice(start, start + MAX_SSH_DATA_IPC_CHUNK),
-        });
-      }
-      return;
-    }
-    const chunk = data.slice(0, MAX_SSH_DATA_IPC_CHUNK);
-    const rest = data.slice(MAX_SSH_DATA_IPC_CHUNK);
-    sshDataBufferMap.set(connectionId, rest);
-    safeSend('ssh:data', { sessionId: connectionId, data: chunk });
-    const nextTimer = setTimeout(() => flushSshData(connectionId), 0);
-    sshDataTimerMap.set(connectionId, nextTimer);
-  };
-  const enqueueSshData = (connectionId: number, data: string) => {
-    const current = sshDataBufferMap.get(connectionId) || '';
-    const next = current + data;
-    sshDataBufferMap.set(connectionId, next);
-    if (next.length >= MAX_SSH_DATA_IPC_CHUNK) {
-      flushSshData(connectionId);
-      return;
-    }
-    if (sshDataTimerMap.has(connectionId)) return;
-    const timer = setTimeout(() => flushSshData(connectionId), SSH_DATA_FLUSH_DELAY_MS);
-    sshDataTimerMap.set(connectionId, timer);
-  };
+  const sshDataBuffer = new SshDataBuffer({
+    send: (connectionId, data) => safeSend('ssh:data', { sessionId: connectionId, data }),
+    getShell: (connectionId) => sshStateMap.get(connectionId)?.shell,
+  });
 
   ipcMain.handle('settings:get', async () => readSettings());
   ipcMain.handle('settings:update', async (_, partial: unknown) => {
@@ -223,7 +182,7 @@ export function registerIpc() {
       cancelPendingHostKeyRequests(connectionId);
       cancelPendingAuthChallenges(connectionId);
       const attempt = beginConnectionAttempt(connectionId);
-      flushSshData(connectionId);
+      sshDataBuffer.flush(connectionId);
       try {
         await cleanupConnectionState(connectionId);
         if (attempt.cancelled) throw new Error(SSH_CONNECT_CANCELLED);
@@ -320,10 +279,10 @@ export function registerIpc() {
             stream.on('data', (data: Buffer) => {
               const text = data.toString('utf8');
               updateCwdFromPrompt(connectionId, text);
-              enqueueSshData(connectionId, text);
+              sshDataBuffer.enqueue(connectionId, text);
             });
             stream.on('close', () => {
-              flushSshData(connectionId, true);
+              sshDataBuffer.flush(connectionId, true);
               void cleanupConnectionState(connectionId, client).then((cleaned) => {
                 if (cleaned) safeSend('ssh:closed', { sessionId: connectionId });
               });
@@ -401,7 +360,7 @@ export function registerIpc() {
     cancelPendingHostKeyRequests(sessionId);
     cancelPendingAuthChallenges(sessionId);
     cancelPendingConnectionAttempt(sessionId);
-    flushSshData(sessionId, true);
+    sshDataBuffer.flush(sessionId, true);
     await cleanupConnectionState(sessionId);
     return true;
   });
