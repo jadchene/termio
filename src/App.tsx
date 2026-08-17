@@ -152,12 +152,19 @@ export default function App() {
       cancelDialogRequest(`ssh-host-key:${requestId}`, false);
     });
     const unsubscribeHostKeyMismatch = window.terminalApi.onSshHostKeyMismatch((event) => {
-      void showAlert(
-        `已阻止连接到 ${event.host}:${event.port}。\n\n` +
-          `保存的指纹: ${event.expectedFingerprint}\n当前指纹: ${event.actualFingerprint}\n\n` +
-          '服务器主机密钥发生变化。请先确认服务器是否重装或存在网络劫持。',
-        'SSH 主机指纹不匹配',
-      );
+      void (async () => {
+        const requestKey = `ssh-host-key:${event.requestId}`;
+        const accepted = await askConfirm(
+          `连接到 ${event.host}:${event.port} 时发现主机密钥发生变化。\n\n` +
+            `会话: ${event.name}\n算法: ${event.algorithm}\n` +
+            `保存的指纹: ${event.expectedFingerprint}\n当前指纹: ${event.actualFingerprint}\n\n` +
+            '这可能是服务器重装，也可能是网络劫持。请先通过可信渠道核对当前指纹。确认后将替换保存的主机密钥并继续连接。',
+          'SSH 主机指纹不匹配',
+          requestKey,
+          { confirmText: '信任并使用新指纹', confirmDanger: true },
+        ).catch(() => false);
+        await window.terminalApi.resolveSshHostKeyVerification(event.requestId, accepted).catch(() => false);
+      })();
     });
     const unsubscribeAuthChallenge = window.terminalApi.onSshAuthChallenge((event) => {
       void (async () => {

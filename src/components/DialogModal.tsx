@@ -49,7 +49,9 @@ export const DialogModal = (props: DialogModalProps) => {
       closable={false}
       footer={[
         dialog.type !== 'alert' && <Button key="cancel" onClick={() => onClose(dialog.type === 'confirm' ? false : null)}>取消</Button>,
-        <Button key="confirm" type="primary" onClick={submit}>确定</Button>,
+        <Button key="confirm" type="primary" danger={dialog.confirmDanger} onClick={submit}>
+          {dialog.confirmText || '确定'}
+        </Button>,
       ]}
     >
       <div className="dialog-message">{dialog.message}</div>

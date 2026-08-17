@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createSequentialQueue } from '../utils/sequentialQueue';
 
 type DialogType = 'alert' | 'confirm' | 'prompt';
+type ConfirmDialogOptions = {
+  confirmText?: string;
+  confirmDanger?: boolean;
+};
 export type PasswordPromptResult = { value: string; remember: boolean };
 export type DialogResult = boolean | string | PasswordPromptResult | null | void;
 export type DialogState = {
@@ -11,6 +15,8 @@ export type DialogState = {
   defaultValue?: string;
   inputType?: 'text' | 'password';
   rememberOption?: { label: string; defaultValue: boolean };
+  confirmText?: string;
+  confirmDanger?: boolean;
   requestKey?: string;
 };
 
@@ -67,8 +73,13 @@ export function useDialog() {
   }, []);
 
   const askConfirm = useCallback(
-    async (message: string, title = '确认', requestKey?: string): Promise<boolean> =>
-      openDialog<boolean>({ type: 'confirm', title, message, requestKey }),
+    async (
+      message: string,
+      title = '确认',
+      requestKey?: string,
+      options: ConfirmDialogOptions = {},
+    ): Promise<boolean> =>
+      openDialog<boolean>({ type: 'confirm', title, message, requestKey, ...options }),
     [openDialog],
   );
 

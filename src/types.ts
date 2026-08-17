@@ -195,6 +195,7 @@ declare global {
       resolveSshHostKeyVerification: (requestId: string, accepted: boolean) => Promise<boolean>;
       onSshHostKeyVerificationExpired: (cb: (event: { requestId: string }) => void) => () => void;
       onSshHostKeyMismatch: (cb: (event: {
+        requestId: string;
         sessionId: number;
         name: string;
         host: string;

@@ -5,6 +5,7 @@ import { get, run } from './db';
 import { safeSend } from './window';
 import { registerTrustedHandle } from './ipcSecurity';
 import { formatHostKeyFingerprint } from './hostFingerprint';
+import { verifyHostKeyTrust } from './hostKeyTrust';
 
 export { formatHostKeyFingerprint } from './hostFingerprint';
 
@@ -42,6 +43,7 @@ const requestHostKeyConfirmation = (
   connectionId: number,
   algorithm: string,
   fingerprint: string,
+  expectedFingerprint?: string,
 ): Promise<boolean> => new Promise<boolean>((resolve) => {
   const requestId = randomUUID();
   const timer = setTimeout(() => {
@@ -51,7 +53,7 @@ const requestHostKeyConfirmation = (
   }, 60_000);
   timer.unref();
   pendingHostKeyRequests.set(requestId, { connectionId, resolve, timer });
-  safeSend('ssh:host-key-verification', {
+  safeSend(expectedFingerprint !== undefined ? 'ssh:host-key-mismatch' : 'ssh:host-key-verification', {
     requestId,
     sessionId: session.id,
     name: session.name,
@@ -59,13 +61,35 @@ const requestHostKeyConfirmation = (
     port: session.port,
     algorithm,
     fingerprint,
+    ...(expectedFingerprint !== undefined
+      ? { expectedFingerprint, actualFingerprint: fingerprint }
+      : {}),
   });
 });
+
+const saveHostKey = async (
+  host: string,
+  port: number,
+  algorithm: string,
+  fingerprint: string,
+  keyBase64: string,
+): Promise<void> => {
+  await run(
+    `INSERT INTO ssh_host_key(host, port, algorithm, fingerprint, key_base64, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?)
+     ON CONFLICT(host, port) DO UPDATE SET
+       algorithm = excluded.algorithm,
+       fingerprint = excluded.fingerprint,
+       key_base64 = excluded.key_base64,
+       updated_at = excluded.updated_at`,
+    [host, port, algorithm, fingerprint, keyBase64, Date.now()],
+  );
+};
 
 export const verifySessionHostKey = async (
   session: Session,
   key: Buffer,
-  onMismatch?: () => void,
+  onMismatchRejected?: () => void,
   connectionId = session.id,
 ): Promise<boolean> => {
   const host = normalizeHost(session.host);
@@ -77,45 +101,32 @@ export const verifySessionHostKey = async (
     'SELECT host, port, algorithm, fingerprint, key_base64 FROM ssh_host_key WHERE host = ? AND port = ?',
     [host, port],
   );
-  if (stored) {
-    if (stored.key_base64 === keyBase64) return true;
-    onMismatch?.();
-    safeSend('ssh:host-key-mismatch', {
-      sessionId: session.id,
-      name: session.name,
-      host: session.host,
-      port,
+  return verifyHostKeyTrust({
+    stored: stored
+      ? { fingerprint: stored.fingerprint, keyBase64: stored.key_base64 }
+      : undefined,
+    keyBase64,
+    requestConfirmation: (expectedFingerprint) => requestHostKeyConfirmation(
+      session,
+      connectionId,
       algorithm,
-      expectedFingerprint: stored.fingerprint,
-      actualFingerprint: fingerprint,
-    });
-    return false;
-  }
-
-  const accepted = await requestHostKeyConfirmation(session, connectionId, algorithm, fingerprint);
-  if (!accepted) return false;
-  await run(
-    `INSERT INTO ssh_host_key(host, port, algorithm, fingerprint, key_base64, updated_at)
-     VALUES(?, ?, ?, ?, ?, ?)
-     ON CONFLICT(host, port) DO UPDATE SET
-       algorithm = excluded.algorithm,
-       fingerprint = excluded.fingerprint,
-       key_base64 = excluded.key_base64,
-       updated_at = excluded.updated_at`,
-    [host, port, algorithm, fingerprint, keyBase64, Date.now()],
-  );
-  return true;
+      fingerprint,
+      expectedFingerprint,
+    ),
+    save: () => saveHostKey(host, port, algorithm, fingerprint, keyBase64),
+    onMismatchRejected,
+  });
 };
 
 export const createHostVerifier = (
   session: Session,
-  onMismatch?: () => void,
+  onMismatchRejected?: () => void,
   connectionId = session.id,
 ) => (
   key: Buffer,
   callback: (accepted: boolean) => void,
 ): void => {
-  void verifySessionHostKey(session, key, onMismatch, connectionId).then(callback).catch((error) => {
+  void verifySessionHostKey(session, key, onMismatchRejected, connectionId).then(callback).catch((error) => {
     console.warn('[SSH] Host key verification failed:', error);
     callback(false);
   });
