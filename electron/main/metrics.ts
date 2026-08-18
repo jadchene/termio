@@ -28,81 +28,99 @@ import { buildMetricsCommand } from './metricsCommand';
 
 export { parseCpu, parseMem } from './metricsParsers';
 
-export function subscribeMetrics() {
-  let lastSlowSampleAt = 0;
-  let lastNetworkSampleAt = 0;
-  let metricsSequence = 0;
-  const emptyPayload = (sessionId: number | null, stale: boolean): RemoteMetricsPayload => ({
-    sessionId,
-    sequence: ++metricsSequence,
-    stale,
-    sampledAt: Date.now(),
-    system: { version: '', arch: '', kernelVersion: '', uptimeSeconds: 0 },
-    cpu: 0,
-    cpuName: '',
-    cpuPhysicalCores: 0,
-    cpuLogicalCores: 0,
-    cpuFrequencyMhz: 0,
-    cpuMaxFrequencyMhz: 0,
-    cpuTemp: null,
-    memory: { usedGb: 0, totalGb: 0, percent: 0, swapUsedGb: 0, swapTotalGb: 0 },
-    network: { upload: 0, download: 0, ips: [], interfaceName: '', gateway: '', dns: [] },
-    disk: {
-      totalGb: 0,
-      usedGb: 0,
-      percent: 0,
-      upload: 0,
-      download: 0,
-      ssdCount: 0,
-      ssdTotalGb: 0,
-      hddCount: 0,
-      hddTotalGb: 0,
-    },
-    gpu: { available: false, driverVersion: '', cudaVersion: '', items: [] },
-    processes: [],
-  });
-  sharedState.metricsTimer = setInterval(async () => {
-    if (!sharedState.mainWindow || sharedState.mainWindow.isDestroyed() || sharedState.metricsCollecting) return;
-    sharedState.metricsCollecting = true;
-    try {
-      if (!sharedState.metricsSessionId || !sshStateMap.has(sharedState.metricsSessionId)) {
-        if (!sharedState.metricsInactiveSent) {
-          safeSend('system:metrics', emptyPayload(null, false));
-          sharedState.metricsInactiveSent = true;
-        }
-      } else {
-        const now = Date.now();
-        const includeSlowSample = now - lastSlowSampleAt >= METRICS_SLOW_SAMPLE_INTERVAL_MS;
-        const includeNetworkSample = now - lastNetworkSampleAt >= METRICS_NETWORK_SAMPLE_INTERVAL_MS;
-        const sessionId = sharedState.metricsSessionId;
-        const payload = await collectRemoteMetrics(
-          sessionId,
-          { includeSlowSample, includeNetworkSample },
-          ++metricsSequence,
-        );
-        safeSend('system:metrics', payload);
-        if (includeSlowSample) {
-          lastSlowSampleAt = now;
-        }
-        if (includeNetworkSample) {
-          lastNetworkSampleAt = now;
-        }
-        sharedState.metricsInactiveSent = false;
-      }
-    } catch (error) {
-      // Keep metrics loop alive even if a probe fails once.
+let lastSlowSampleAt = 0;
+let lastNetworkSampleAt = 0;
+let metricsSequence = 0;
+let immediateCollectionPending = false;
+
+const emptyPayload = (sessionId: number | null, stale: boolean): RemoteMetricsPayload => ({
+  sessionId,
+  sequence: ++metricsSequence,
+  stale,
+  sampledAt: Date.now(),
+  system: { version: '', arch: '', kernelVersion: '', uptimeSeconds: 0 },
+  cpu: 0,
+  cpuName: '',
+  cpuPhysicalCores: 0,
+  cpuLogicalCores: 0,
+  cpuFrequencyMhz: 0,
+  cpuMaxFrequencyMhz: 0,
+  cpuTemp: null,
+  memory: { usedGb: 0, totalGb: 0, percent: 0, swapUsedGb: 0, swapTotalGb: 0 },
+  network: { upload: 0, download: 0, ips: [], interfaceName: '', gateway: '', dns: [] },
+  disk: {
+    totalGb: 0,
+    usedGb: 0,
+    percent: 0,
+    upload: 0,
+    download: 0,
+    ssdCount: 0,
+    ssdTotalGb: 0,
+    hddCount: 0,
+    hddTotalGb: 0,
+  },
+  gpu: { available: false, driverVersion: '', cudaVersion: '', items: [] },
+  processes: [],
+});
+
+const collectAndSendMetrics = async (queueIfBusy = false): Promise<boolean> => {
+  if (!sharedState.mainWindow || sharedState.mainWindow.isDestroyed()) return false;
+  if (sharedState.metricsCollecting) {
+    if (queueIfBusy) immediateCollectionPending = true;
+    return false;
+  }
+  sharedState.metricsCollecting = true;
+  let sampledSessionId: number | null = null;
+  try {
+    if (!sharedState.metricsSessionId || !sshStateMap.has(sharedState.metricsSessionId)) {
       if (!sharedState.metricsInactiveSent) {
-        const sessionId = sharedState.metricsSessionId;
-        const cached = sessionId ? remoteMetricsPayloadMap.get(sessionId) : undefined;
-        safeSend(
-          'system:metrics',
-          cached ? { ...cached, sequence: ++metricsSequence, stale: true } : emptyPayload(sessionId, true),
-        );
+        safeSend('system:metrics', emptyPayload(null, false));
         sharedState.metricsInactiveSent = true;
       }
-    } finally {
-      sharedState.metricsCollecting = false;
+      return true;
     }
+    const now = Date.now();
+    sampledSessionId = sharedState.metricsSessionId;
+    const hasCachedPayload = remoteMetricsPayloadMap.has(sampledSessionId);
+    const includeSlowSample = !hasCachedPayload || now - lastSlowSampleAt >= METRICS_SLOW_SAMPLE_INTERVAL_MS;
+    const includeNetworkSample = !hasCachedPayload
+      || now - lastNetworkSampleAt >= METRICS_NETWORK_SAMPLE_INTERVAL_MS;
+    const payload = await collectRemoteMetrics(
+      sampledSessionId,
+      { includeSlowSample, includeNetworkSample },
+      ++metricsSequence,
+    );
+    safeSend('system:metrics', payload);
+    if (includeSlowSample) lastSlowSampleAt = now;
+    if (includeNetworkSample) lastNetworkSampleAt = now;
+    sharedState.metricsInactiveSent = false;
+    return true;
+  } catch {
+    if (!sharedState.metricsInactiveSent) {
+      const cached = sampledSessionId ? remoteMetricsPayloadMap.get(sampledSessionId) : undefined;
+      safeSend(
+        'system:metrics',
+        cached
+          ? { ...cached, sequence: ++metricsSequence, stale: true }
+          : emptyPayload(sampledSessionId, true),
+      );
+      sharedState.metricsInactiveSent = true;
+    }
+    return false;
+  } finally {
+    sharedState.metricsCollecting = false;
+    if (immediateCollectionPending) {
+      immediateCollectionPending = false;
+      void collectAndSendMetrics();
+    }
+  }
+};
+
+export const requestMetricsCollection = async (): Promise<boolean> => collectAndSendMetrics(true);
+
+export function subscribeMetrics() {
+  sharedState.metricsTimer = setInterval(() => {
+    void collectAndSendMetrics();
   }, 1000);
 }
 

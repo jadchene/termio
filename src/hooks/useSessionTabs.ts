@@ -21,6 +21,7 @@ type UseSessionTabsParams = {
   nextTabIdRef: MutableRefObject<number>;
   disconnectedByTabRef: MutableRefObject<Map<number, boolean>>;
   reconnectingTabRef: MutableRefObject<Set<number>>;
+  metricsVisibleRef: MutableRefObject<boolean>;
   attachTerminal: (sessionId: number, settings: Settings) => void;
   disposeTerminal: (sessionId: number) => void;
   clearSftpSessionState: (sessionId: number) => void;
@@ -55,6 +56,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
     nextTabIdRef,
     disconnectedByTabRef,
     reconnectingTabRef,
+    metricsVisibleRef,
     attachTerminal,
     disposeTerminal,
     clearSftpSessionState,
@@ -86,7 +88,9 @@ export function useSessionTabs(params: UseSessionTabsParams) {
       setConnectionState(tabId, 'connected');
       if (settingsRef.current) attachTerminal(tabId, settingsRef.current);
       if (activeSessionIdRef.current === tabId) {
-        await window.terminalApi.setMetricsSession(tabId).catch(() => false);
+        if (metricsVisibleRef.current) {
+          await window.terminalApi.setMetricsSession(tabId).catch(() => false);
+        }
         await Promise.resolve(onReconnectActiveSession?.(tabId)).catch(() => undefined);
         setPausedOutput(false);
       }

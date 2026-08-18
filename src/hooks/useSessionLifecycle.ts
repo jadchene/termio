@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { Session, Settings } from '../types';
 import { formatSftpError, isSilentSftpError } from '../utils/sftpError';
+import { resolveMetricsSessionId } from '../utils/metricsVisibility';
 
 type UseSessionLifecycleParams = {
   settings: Settings | null;
@@ -125,8 +126,13 @@ export function useSessionLifecycle(params: UseSessionLifecycleParams) {
   }, [activeSessionId, setSftpPath, clearSftpSelection, hasSftpSessionState, refreshSftp, reportSftpError]);
 
   useEffect(() => {
-    window.terminalApi.setMetricsSession(activeSessionId).catch(() => null);
-  }, [activeSessionId]);
+    const metricsSessionId = resolveMetricsSessionId(
+      activeSessionId,
+      sidebarTab,
+      !!settings?.ui.sidebarVisible,
+    );
+    window.terminalApi.setMetricsSession(metricsSessionId).catch(() => null);
+  }, [activeSessionId, sidebarTab, settings?.ui.sidebarVisible]);
 
   useEffect(() => {
     if (!activeSessionId || !terminalContainerRef.current) return;

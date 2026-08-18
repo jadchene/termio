@@ -30,6 +30,7 @@ import { useWindowActions } from './hooks/useWindowActions';
 import { formatSftpError, isSilentSftpError } from './utils/sftpError';
 import { formatSftpMeta } from './utils/sftpFormat';
 import { getTerminalTheme } from './utils/terminalTheme';
+import { isMetricsPanelVisible } from './utils/metricsVisibility';
 
 type SessionForm = Omit<Session, 'id'>;
 type Tab = { id: number; sessionId: number; title: string };
@@ -114,6 +115,8 @@ export default function App() {
   const tabsRef = useRef<Tab[]>([]);
   const sessionsRef = useRef<Session[]>([]);
   const settingsRef = useRef<Settings | null>(null);
+  const metricsVisibleRef = useRef(false);
+  metricsVisibleRef.current = isMetricsPanelVisible(sidebarTab, !!settings?.ui.sidebarVisible);
   const expiredAuthRequestIdsRef = useRef<Set<string>>(new Set());
   const {
     dialog,
@@ -344,6 +347,7 @@ export default function App() {
     nextTabIdRef,
     disconnectedByTabRef,
     reconnectingTabRef,
+    metricsVisibleRef,
     attachTerminal,
     disposeTerminal,
     clearSftpSessionState,

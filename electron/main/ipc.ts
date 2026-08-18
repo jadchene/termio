@@ -41,6 +41,7 @@ import {
   releaseConnectionAttempt,
 } from './connectionAttempt';
 import { SshDataBuffer } from './sshDataBuffer';
+import { requestMetricsCollection } from './metrics';
 
 const ipcMain = {
   handle: (
@@ -105,6 +106,7 @@ export function registerIpc() {
   ipcMain.handle('metrics:set-session', async (_, sessionIdInput: unknown) => {
     sharedState.metricsSessionId = requireNullablePositiveId(sessionIdInput, '指标会话 ID');
     sharedState.metricsInactiveSent = false;
+    if (sharedState.metricsSessionId) void requestMetricsCollection();
     return true;
   });
 

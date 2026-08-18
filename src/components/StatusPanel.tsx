@@ -120,8 +120,11 @@ const ProcessPanel = ({ items }: { items: Metrics['processes'] }) => {
 };
 
 export const StatusPanel = ({ activeSessionId, currentMetrics }: StatusPanelProps) => {
-  if (!activeSessionId || !currentMetrics) {
+  if (!activeSessionId) {
     return <div className="panel-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无活动会话" /></div>;
+  }
+  if (!currentMetrics) {
+    return <div className="panel-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在读取系统状态…" /></div>;
   }
 
   return (
