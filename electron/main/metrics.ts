@@ -1,29 +1,65 @@
 import { RemoteMetricsPayload } from './types';
-import { sshStateMap, remoteMetricsSnapshotMap, remoteMetricsPayloadMap, METRICS_FULL_SAMPLE_INTERVAL_MS, sharedState } from './state';
+import {
+  sshStateMap,
+  remoteMetricsSnapshotMap,
+  remoteMetricsPayloadMap,
+  METRICS_NETWORK_SAMPLE_INTERVAL_MS,
+  METRICS_SLOW_SAMPLE_INTERVAL_MS,
+  sharedState,
+} from './state';
 import { safeSend } from './window';
 import { CappedMetricsOutput } from './metricsOutput';
-import { parseCpu, parseMem } from './metricsParsers';
+import {
+  parseCpu,
+  parseBlockDevices,
+  parseCpuFrequencyMhz,
+  parseCpuMaxFrequencyMhz,
+  parseDnsServers,
+  parseGpu,
+  parseGpuDriverInfo,
+  parseMem,
+  parseNetworkRoute,
+  parseProcesses,
+  normalizeProcessCpuPercent,
+  parseSystemInfo,
+  parseUptimeSeconds,
+} from './metricsParsers';
+import { buildMetricsCommand } from './metricsCommand';
 
 export { parseCpu, parseMem } from './metricsParsers';
 
 export function subscribeMetrics() {
-  let lastFullSampleAt = 0;
+  let lastSlowSampleAt = 0;
+  let lastNetworkSampleAt = 0;
   let metricsSequence = 0;
   const emptyPayload = (sessionId: number | null, stale: boolean): RemoteMetricsPayload => ({
     sessionId,
     sequence: ++metricsSequence,
     stale,
     sampledAt: Date.now(),
-    system: { version: '', arch: '' },
+    system: { version: '', arch: '', kernelVersion: '', uptimeSeconds: 0 },
     cpu: 0,
     cpuName: '',
     cpuPhysicalCores: 0,
     cpuLogicalCores: 0,
+    cpuFrequencyMhz: 0,
+    cpuMaxFrequencyMhz: 0,
     cpuTemp: null,
-    memory: { usedGb: 0, totalGb: 0, percent: 0 },
-    network: { upload: 0, download: 0, ips: [] },
-    disk: { totalGb: 0, usedGb: 0, percent: 0, upload: 0, download: 0 },
-    gpu: { available: false, items: [] },
+    memory: { usedGb: 0, totalGb: 0, percent: 0, swapUsedGb: 0, swapTotalGb: 0 },
+    network: { upload: 0, download: 0, ips: [], interfaceName: '', gateway: '', dns: [] },
+    disk: {
+      totalGb: 0,
+      usedGb: 0,
+      percent: 0,
+      upload: 0,
+      download: 0,
+      ssdCount: 0,
+      ssdTotalGb: 0,
+      hddCount: 0,
+      hddTotalGb: 0,
+    },
+    gpu: { available: false, driverVersion: '', cudaVersion: '', items: [] },
+    processes: [],
   });
   sharedState.metricsTimer = setInterval(async () => {
     if (!sharedState.mainWindow || sharedState.mainWindow.isDestroyed() || sharedState.metricsCollecting) return;
@@ -36,12 +72,20 @@ export function subscribeMetrics() {
         }
       } else {
         const now = Date.now();
-        const forceFullSample = now - lastFullSampleAt >= METRICS_FULL_SAMPLE_INTERVAL_MS;
+        const includeSlowSample = now - lastSlowSampleAt >= METRICS_SLOW_SAMPLE_INTERVAL_MS;
+        const includeNetworkSample = now - lastNetworkSampleAt >= METRICS_NETWORK_SAMPLE_INTERVAL_MS;
         const sessionId = sharedState.metricsSessionId;
-        const payload = await collectRemoteMetrics(sessionId, forceFullSample, ++metricsSequence);
+        const payload = await collectRemoteMetrics(
+          sessionId,
+          { includeSlowSample, includeNetworkSample },
+          ++metricsSequence,
+        );
         safeSend('system:metrics', payload);
-        if (forceFullSample) {
-          lastFullSampleAt = now;
+        if (includeSlowSample) {
+          lastSlowSampleAt = now;
+        }
+        if (includeNetworkSample) {
+          lastNetworkSampleAt = now;
         }
         sharedState.metricsInactiveSent = false;
       }
@@ -179,49 +223,6 @@ export function parseFsUsage(lines: string[]): { total: number; used: number; pe
   return { total, used, percent };
 }
 
-export function parseGpu(lines: string[]) {
-  const items = lines
-    .map((line, index) => {
-      const raw = String(line || '').trim();
-      if (!raw) return null;
-      const parts = raw.split(',').map((x) => x.trim());
-      if (parts.length < 5) return null;
-      const name = parts[0];
-      const temperature = Number(parts[1]) || 0;
-      const load = Number(parts[2]) || 0;
-      const memUsedMb = Number(parts[3]) || 0;
-      const memTotalMb = Number(parts[4]) || 0;
-      const powerDrawRaw = parts.length >= 7 ? Number(parts[5]) : NaN;
-      const powerLimitRaw = parts.length >= 7 ? Number(parts[6]) : NaN;
-      return {
-        index,
-        name,
-        temperature: Number(temperature.toFixed(1)),
-        memoryUsedGb: Number((memUsedMb / 1024).toFixed(2)),
-        memoryTotalGb: Number((memTotalMb / 1024).toFixed(2)),
-        memoryPercent: memTotalMb ? Number(((memUsedMb / memTotalMb) * 100).toFixed(1)) : 0,
-        load: Number(load.toFixed(1)),
-        powerDraw: Number.isFinite(powerDrawRaw) ? Number(powerDrawRaw.toFixed(1)) : null,
-        powerLimit: Number.isFinite(powerLimitRaw) ? Number(powerLimitRaw.toFixed(1)) : null,
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => !!item);
-  return {
-    available: items.length > 0,
-    items,
-  } as const;
-}
-
-export function parseSystem(lines: string[]): { version: string; arch: string } {
-  const nonEmpty = lines
-    .map((line) => String(line || '').trim().replace(/^"+|"+$/g, ''))
-    .filter((line) => !!line);
-  return {
-    version: nonEmpty[0] || '',
-    arch: nonEmpty[1] || '',
-  };
-}
-
 export function parseCpuInfoFromLscpu(lines: string[]): { name: string; mhz: number } {
   let name = '';
   let mhz = 0;
@@ -242,30 +243,6 @@ export function parseCpuInfoFromLscpu(lines: string[]): { name: string; mhz: num
     }
   }
   return { name, mhz: Number(mhz.toFixed(0)) };
-}
-
-export function parseCpuFreqMhz(lines: string[]): number {
-  const values: number[] = [];
-  for (const raw of lines) {
-    const val = Number(String(raw || '').trim().replace(/[^0-9.]/g, '')) || 0;
-    if (val <= 0) continue;
-    // cpufreq files usually return kHz.
-    values.push(val > 10000 ? val / 1000 : val);
-  }
-  if (values.length === 0) return 0;
-  const avg = values.reduce((acc, n) => acc + n, 0) / values.length;
-  return Number(avg.toFixed(0));
-}
-
-export function parseCpuFreqMaxMhz(lines: string[]): number {
-  let max = 0;
-  for (const raw of lines) {
-    const val = Number(String(raw || '').trim().replace(/[^0-9.]/g, '')) || 0;
-    if (val <= 0) continue;
-    const mhz = val > 10000 ? val / 1000 : val;
-    if (mhz > max) max = mhz;
-  }
-  return Number(max.toFixed(0));
 }
 
 export function parseCoreCount(lines: string[]): number {
@@ -396,40 +373,27 @@ export function execOnSession(
 
 export async function collectRemoteMetrics(
   sessionId: number,
-  includeStaticSample = false,
+  options: { includeSlowSample?: boolean; includeNetworkSample?: boolean } = {},
   sequence = 0,
 ): Promise<RemoteMetricsPayload> {
   const cachedPayload = remoteMetricsPayloadMap.get(sessionId);
-  const shouldSampleStatic = includeStaticSample || !cachedPayload;
-  const script = shouldSampleStatic
-    ? [
-        'echo "__CPU__"; head -n1 /proc/stat 2>/dev/null || echo ""',
-        'echo "__CPUINFO__"; (cat /proc/cpuinfo 2>/dev/null || true)',
-        'echo "__LSCPU__"; (LANG=C LC_ALL=C lscpu 2>/dev/null || true)',
-        'echo "__SYS__"; (sh -c \'if [ -f /etc/os-release ]; then . /etc/os-release; echo "${PRETTY_NAME:-${NAME:-}}"; fi; uname -m 2>/dev/null\' || true)',
-        'echo "__MEM__"; (grep -E "MemTotal|MemAvailable" /proc/meminfo 2>/dev/null || true)',
-        'echo "__IP__"; ((hostname -I 2>/dev/null || true); (ip -o -4 addr show scope global 2>/dev/null | cut -d\' \' -f7 | cut -d/ -f1 || true))',
-        'echo "__NET__"; (cat /proc/net/dev 2>/dev/null || true)',
-        'echo "__DISK__"; (cat /proc/diskstats 2>/dev/null || true)',
-        'echo "__FS__"; (df -B1 -P -x tmpfs -x devtmpfs -x overlay -x squashfs 2>/dev/null || true)',
-        'echo "__CPUTEMP__"; (for d in /sys/class/hwmon/hwmon*; do [ -d "$d" ] || continue; n=$(cat "$d/name" 2>/dev/null || echo ""); echo "NAME:$n"; for f in "$d"/temp*_input; do [ -f "$f" ] || continue; b="${f%_input}"; l=$(cat "${b}_label" 2>/dev/null || echo ""); echo "T:$l:$(cat "$f" 2>/dev/null || echo 0)"; done; done)',
-        'echo "__GPU__"; (command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit --format=csv,noheader,nounits || true)',
-      ].join('; ')
-    : [
-        'echo "__CPU__"; head -n1 /proc/stat 2>/dev/null || echo ""',
-        'echo "__MEM__"; (grep -E "MemTotal|MemAvailable" /proc/meminfo 2>/dev/null || true)',
-        'echo "__IP__"; ((hostname -I 2>/dev/null || true); (ip -o -4 addr show scope global 2>/dev/null | cut -d\' \' -f7 | cut -d/ -f1 || true))',
-        'echo "__NET__"; (cat /proc/net/dev 2>/dev/null || true)',
-        'echo "__DISK__"; (cat /proc/diskstats 2>/dev/null || true)',
-      ].join('; ');
+  const shouldSampleStatic = !cachedPayload;
+  const shouldSampleSlow = !!options.includeSlowSample || shouldSampleStatic;
+  const shouldSampleNetwork = !!options.includeNetworkSample || shouldSampleStatic;
+  const script = buildMetricsCommand({
+    includeStatic: shouldSampleStatic,
+    includeSlow: shouldSampleSlow,
+    includeNetwork: shouldSampleNetwork,
+  });
 
   const output = await execOnSession(sessionId, script, {
     timeoutMs: 5000,
-    maxOutputBytes: shouldSampleStatic ? 1024 * 1024 : 256 * 1024,
+    maxOutputBytes: shouldSampleStatic || shouldSampleSlow ? 1024 * 1024 : 256 * 1024,
   });
   const lines = output.split(/\r?\n/);
   const section: Record<string, string[]> = {
     CPU: [],
+    BLOCKDEV: [],
     CPUINFO: [],
     LSCPU: [],
     CPUFREQ: [],
@@ -441,11 +405,18 @@ export async function collectRemoteMetrics(
     NET: [],
     DISK: [],
     FS: [],
+    NETROUTE: [],
+    DNS: [],
+    GPUINFO: [],
     GPU: [],
+    UPTIME: [],
+    PROCESSES_CPU: [],
+    PROCESSES_MEMORY: [],
   };
   let current: keyof typeof section | null = null;
   for (const line of lines) {
     if (line === '__CPU__') current = 'CPU';
+    else if (line === '__BLOCKDEV__') current = 'BLOCKDEV';
     else if (line === '__CPUINFO__') current = 'CPUINFO';
     else if (line === '__LSCPU__') current = 'LSCPU';
     else if (line === '__CPUFREQ__') current = 'CPUFREQ';
@@ -457,7 +428,13 @@ export async function collectRemoteMetrics(
     else if (line === '__NET__') current = 'NET';
     else if (line === '__DISK__') current = 'DISK';
     else if (line === '__FS__') current = 'FS';
+    else if (line === '__NETROUTE__') current = 'NETROUTE';
+    else if (line === '__DNS__') current = 'DNS';
+    else if (line === '__GPUINFO__') current = 'GPUINFO';
     else if (line === '__GPU__') current = 'GPU';
+    else if (line === '__UPTIME__') current = 'UPTIME';
+    else if (line === '__PROCESSES_CPU__') current = 'PROCESSES_CPU';
+    else if (line === '__PROCESSES_MEMORY__') current = 'PROCESSES_MEMORY';
     else if (current) section[current].push(line);
   }
 
@@ -470,12 +447,17 @@ export async function collectRemoteMetrics(
   const cpuPhysicalCoreCount = detectedPhysicalCoreCount > 0 && detectedPhysicalCoreCount <= cpuLogicalCoreCount
     ? detectedPhysicalCoreCount
     : 0;
-  const systemInfo = parseSystem(section.SYS);
+  const systemInfo = parseSystemInfo(section.SYS);
+  systemInfo.uptimeSeconds = parseUptimeSeconds(section.UPTIME, cachedPayload?.system.uptimeSeconds || 0);
   const memStat = parseMem(section.MEM);
-  const ips = parseIps(section.IP);
+  const networkRoute = parseNetworkRoute(section.NETROUTE);
+  const fallbackIps = parseIps(section.IP);
+  const ips = networkRoute.ip ? [networkRoute.ip] : fallbackIps;
+  const dns = parseDnsServers(section.DNS);
   const netStat = parseNet(section.NET);
   const diskStat = parseDisk(section.DISK);
   const fsUsage = parseFsUsage(section.FS);
+  const parsedBlockDevices = parseBlockDevices(section.BLOCKDEV);
 
   const now = Date.now();
   const prev = remoteMetricsSnapshotMap.get(sessionId);
@@ -507,13 +489,23 @@ export async function collectRemoteMetrics(
   });
 
   const memUsed = Math.max(memStat.total - memStat.available, 0);
-  const system = systemInfo.version || systemInfo.arch
+  const swapUsed = Math.max(memStat.swapTotal - memStat.swapFree, 0);
+  const staticSystem = systemInfo.version || systemInfo.arch || systemInfo.kernelVersion
     ? systemInfo
-    : (cachedPayload?.system || { version: '', arch: '' });
+    : (cachedPayload?.system || { version: '', arch: '', kernelVersion: '', uptimeSeconds: 0 });
+  const system = { ...staticSystem, uptimeSeconds: systemInfo.uptimeSeconds };
   const cpuName =
     cpuInfo.name || cpuInfoLscpu.name || cachedPayload?.cpuName || (system.arch ? `CPU (${system.arch})` : 'CPU');
   const cpuLogicalCores = cpuLogicalCoreCount || cachedPayload?.cpuLogicalCores || 0;
   const cpuPhysicalCores = cpuPhysicalCoreCount || cachedPayload?.cpuPhysicalCores || 0;
+  const cpuFrequencyMhz = parseCpuFrequencyMhz(section.CPUFREQ)
+    || cpuInfo.mhz
+    || cpuInfoLscpu.mhz
+    || cachedPayload?.cpuFrequencyMhz
+    || 0;
+  const cpuMaxFrequencyMhz = parseCpuMaxFrequencyMhz(section.CPUFREQMAX)
+    || cachedPayload?.cpuMaxFrequencyMhz
+    || 0;
   const memoryTotalGb = memStat.total
     ? Number((memStat.total / 1024 / 1024 / 1024).toFixed(2))
     : (cachedPayload?.memory.totalGb || 0);
@@ -526,12 +518,31 @@ export async function collectRemoteMetrics(
   const diskPercent = fsUsage.total
     ? Number(fsUsage.percent.toFixed(1))
     : (cachedPayload?.disk.percent || 0);
+  const blockDevices = section.BLOCKDEV.length > 0
+    ? parsedBlockDevices
+    : {
+        ssdCount: cachedPayload?.disk.ssdCount || 0,
+        ssdBytes: (cachedPayload?.disk.ssdTotalGb || 0) * 1024 * 1024 * 1024,
+        hddCount: cachedPayload?.disk.hddCount || 0,
+        hddBytes: (cachedPayload?.disk.hddTotalGb || 0) * 1024 * 1024 * 1024,
+      };
   const cpuTemp = section.CPUTEMP.length > 0
     ? parseCpuTemp(section.CPUTEMP)
     : (cachedPayload?.cpuTemp ?? null);
+  const gpuDriverInfo = parseGpuDriverInfo(section.GPUINFO);
   const gpu: RemoteMetricsPayload['gpu'] = section.GPU.length > 0
-    ? (parseGpu(section.GPU) as RemoteMetricsPayload['gpu'])
-    : (cachedPayload?.gpu || { available: false, items: [] });
+    ? ({
+        ...parseGpu(section.GPU),
+        driverVersion: gpuDriverInfo.driverVersion || cachedPayload?.gpu.driverVersion || '',
+        cudaVersion: gpuDriverInfo.cudaVersion || cachedPayload?.gpu.cudaVersion || '',
+      } as RemoteMetricsPayload['gpu'])
+    : (cachedPayload?.gpu || { available: false, driverVersion: '', cudaVersion: '', items: [] });
+  const processes = section.PROCESSES_CPU.length > 0 || section.PROCESSES_MEMORY.length > 0
+    ? parseProcesses(section.PROCESSES_CPU, section.PROCESSES_MEMORY).map((process) => ({
+        ...process,
+        cpuPercent: normalizeProcessCpuPercent(process.cpuPercent, cpuLogicalCores),
+      }))
+    : (cachedPayload?.processes || []);
 
   const payload: RemoteMetricsPayload = {
     sessionId,
@@ -543,16 +554,23 @@ export async function collectRemoteMetrics(
     cpuName,
     cpuPhysicalCores,
     cpuLogicalCores,
+    cpuFrequencyMhz,
+    cpuMaxFrequencyMhz,
     cpuTemp,
     memory: {
       usedGb: Number((memUsed / 1024 / 1024 / 1024).toFixed(2)),
       totalGb: memoryTotalGb,
       percent: memStat.total ? Number(((memUsed / memStat.total) * 100).toFixed(1)) : (cachedPayload?.memory.percent || 0),
+      swapUsedGb: Number((swapUsed / 1024 / 1024 / 1024).toFixed(2)),
+      swapTotalGb: Number((memStat.swapTotal / 1024 / 1024 / 1024).toFixed(2)),
     },
     network: {
       upload: Number(netUpload.toFixed(0)),
       download: Number(netDownload.toFixed(0)),
       ips: ips.length > 0 ? ips : (cachedPayload?.network.ips || []),
+      interfaceName: networkRoute.interfaceName || cachedPayload?.network.interfaceName || '',
+      gateway: networkRoute.gateway || cachedPayload?.network.gateway || '',
+      dns: dns.length > 0 ? dns : (cachedPayload?.network.dns || []),
     },
     disk: {
       totalGb: diskTotalGb,
@@ -560,8 +578,13 @@ export async function collectRemoteMetrics(
       percent: diskPercent,
       upload: Number(diskWrite.toFixed(0)),
       download: Number(diskRead.toFixed(0)),
+      ssdCount: blockDevices.ssdCount,
+      ssdTotalGb: Number((blockDevices.ssdBytes / 1024 / 1024 / 1024).toFixed(2)),
+      hddCount: blockDevices.hddCount,
+      hddTotalGb: Number((blockDevices.hddBytes / 1024 / 1024 / 1024).toFixed(2)),
     },
     gpu,
+    processes,
   };
   remoteMetricsPayloadMap.set(sessionId, payload);
   return payload;

@@ -24,7 +24,8 @@ export function parseSftpError(error: unknown): SftpErrorPayload {
 }
 
 export function isSilentSftpError(error: unknown): boolean {
-  return parseSftpError(error).code === 'CANCELLED';
+  const code = parseSftpError(error).code;
+  return code === 'CANCELLED' || code === 'NOT_CONNECTED' || code === 'CONNECTION_CLOSED';
 }
 
 export function formatSftpError(error: unknown): string {

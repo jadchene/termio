@@ -87,19 +87,40 @@ export type RemoteMetricsPayload = {
   sequence: number;
   stale: boolean;
   sampledAt: number;
-  system: { version: string; arch: string };
+  system: { version: string; arch: string; kernelVersion: string; uptimeSeconds: number };
   cpu: number;
   cpuName: string;
   cpuPhysicalCores: number;
   cpuLogicalCores: number;
+  cpuFrequencyMhz: number;
+  cpuMaxFrequencyMhz: number;
   cpuTemp: number | null;
-  memory: { usedGb: number; totalGb: number; percent: number };
-  network: { upload: number; download: number; ips: string[] };
-  disk: { totalGb: number; usedGb: number; percent: number; upload: number; download: number };
+  memory: { usedGb: number; totalGb: number; percent: number; swapUsedGb: number; swapTotalGb: number };
+  network: {
+    upload: number;
+    download: number;
+    ips: string[];
+    interfaceName: string;
+    gateway: string;
+    dns: string[];
+  };
+  disk: {
+    totalGb: number;
+    usedGb: number;
+    percent: number;
+    upload: number;
+    download: number;
+    ssdCount: number;
+    ssdTotalGb: number;
+    hddCount: number;
+    hddTotalGb: number;
+  };
   gpu:
-    | { available: false; items: [] }
+    | { available: false; driverVersion: string; cudaVersion: string; items: [] }
     | {
         available: true;
+        driverVersion: string;
+        cudaVersion: string;
         items: Array<{
           index: number;
           name: string;
@@ -110,8 +131,15 @@ export type RemoteMetricsPayload = {
           load: number;
           powerDraw: number | null;
           powerLimit: number | null;
+          clockMhz: number | null;
         }>;
       };
+  processes: Array<{
+    pid: number;
+    name: string;
+    cpuPercent: number;
+    memoryBytes: number;
+  }>;
 };
 
 export type WindowState = {

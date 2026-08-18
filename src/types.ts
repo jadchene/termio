@@ -54,21 +54,30 @@ export type Metrics = {
   system: {
     version: string;
     arch: string;
+    kernelVersion: string;
+    uptimeSeconds: number;
   };
   cpu: number;
   cpuName: string;
   cpuPhysicalCores: number;
   cpuLogicalCores: number;
+  cpuFrequencyMhz: number;
+  cpuMaxFrequencyMhz: number;
   cpuTemp: number | null;
   memory: {
     usedGb: number;
     totalGb: number;
     percent: number;
+    swapUsedGb: number;
+    swapTotalGb: number;
   };
   network: {
     upload: number;
     download: number;
     ips: string[];
+    interfaceName: string;
+    gateway: string;
+    dns: string[];
   };
   disk: {
     totalGb: number;
@@ -76,14 +85,22 @@ export type Metrics = {
     percent: number;
     upload: number;
     download: number;
+    ssdCount: number;
+    ssdTotalGb: number;
+    hddCount: number;
+    hddTotalGb: number;
   };
   gpu:
     | {
         available: false;
+        driverVersion: string;
+        cudaVersion: string;
         items: [];
       }
     | {
         available: true;
+        driverVersion: string;
+        cudaVersion: string;
         items: Array<{
           index: number;
           name: string;
@@ -94,8 +111,15 @@ export type Metrics = {
           load: number;
           powerDraw: number | null;
           powerLimit: number | null;
+          clockMhz: number | null;
         }>;
       };
+  processes: Array<{
+    pid: number;
+    name: string;
+    cpuPercent: number;
+    memoryBytes: number;
+  }>;
 };
 
 export type SftpItem = {
