@@ -548,13 +548,14 @@ export async function collectRemoteMetrics(
     ? parseCpuTemp(section.CPUTEMP)
     : (cachedPayload?.cpuTemp ?? null);
   const gpuDriverInfo = parseGpuDriverInfo(section.GPUINFO);
-  const gpu: RemoteMetricsPayload['gpu'] = section.GPU.length > 0
-    ? ({
-        ...parseGpu(section.GPU),
-        driverVersion: gpuDriverInfo.driverVersion || cachedPayload?.gpu.driverVersion || '',
-        cudaVersion: gpuDriverInfo.cudaVersion || cachedPayload?.gpu.cudaVersion || '',
-      } as RemoteMetricsPayload['gpu'])
+  const sampledGpu = section.GPU.length > 0
+    ? parseGpu(section.GPU)
     : (cachedPayload?.gpu || { available: false, driverVersion: '', cudaVersion: '', items: [] });
+  const gpu = ({
+    ...sampledGpu,
+    driverVersion: gpuDriverInfo.driverVersion || cachedPayload?.gpu.driverVersion || '',
+    cudaVersion: gpuDriverInfo.cudaVersion || cachedPayload?.gpu.cudaVersion || '',
+  } as RemoteMetricsPayload['gpu']);
   const processes = section.PROCESSES_CPU.length > 0 || section.PROCESSES_MEMORY.length > 0
     ? parseProcesses(section.PROCESSES_CPU, section.PROCESSES_MEMORY).map((process) => ({
         ...process,

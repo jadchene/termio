@@ -1,5 +1,4 @@
 import { app, BrowserWindow } from 'electron';
-import { userDataPath } from './env';
 import { db, initStorage } from './db';
 import {
   connectionHomeMap,
@@ -20,13 +19,6 @@ import { cancelAllNativeFileDrags } from './nativeFileDrag';
 import { cancelPendingHostKeyRequests } from './hostKey';
 import { cancelPendingAuthChallenges } from './authChallenge';
 import { cancelAllPendingConnectionAttempts } from './connectionAttempt';
-import fs from 'node:fs';
-
-if (!fs.existsSync(userDataPath)) {
-  fs.mkdirSync(userDataPath, { recursive: true });
-}
-
-app.setPath('userData', userDataPath);
 
 export function focusMainWindow(): void {
   const target = sharedState.mainWindow;

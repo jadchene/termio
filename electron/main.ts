@@ -1,4 +1,7 @@
 import { app } from 'electron';
+import { configureUserDataPath } from './main/env';
+
+configureUserDataPath();
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

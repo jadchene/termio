@@ -25,6 +25,11 @@ export const dbPath = path.join(dataDir, 'app.db');
 
 export const windowStatePath = path.join(userDataPath, 'window-state.json');
 
+export const configureUserDataPath = (): void => {
+  fs.mkdirSync(userDataPath, { recursive: true });
+  app.setPath('userData', userDataPath);
+};
+
 function migrateLegacyRuntimeData() {
   const legacyDbPath = path.join(runtimeDir, 'app.db');
   const legacyUserDataPath = path.join(runtimeDir, 'user-data');

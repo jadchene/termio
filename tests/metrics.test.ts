@@ -132,7 +132,7 @@ test('metrics command samples static host information only when requested', () =
   assert.doesNotMatch(slow, /__CPUINFO__|__SYS__|__GPUINFO__/);
 
   const network = buildMetricsCommand({ includeStatic: false, includeSlow: false, includeNetwork: true });
-  assert.match(network, /__NETROUTE__|__IP__|__DNS__/);
+  assert.match(network, /__NETROUTE__|__IP__|__DNS__|__GPUINFO__/);
 
   const initial = buildMetricsCommand({ includeStatic: true, includeSlow: true, includeNetwork: true });
   assert.match(initial, /__BLOCKDEV__|__CPUINFO__|__CPUFREQMAX__|__SYS__|__GPUINFO__/);
