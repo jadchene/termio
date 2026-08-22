@@ -1,4 +1,4 @@
-import { CloseOutlined, CopyOutlined, MinusOutlined, BorderOutlined } from '@ant-design/icons';
+import { CloseOutlined, MinusOutlined } from '@ant-design/icons';
 import { Button, Tabs, Tooltip } from 'antd';
 import type { ConnectionState } from '../types';
 
@@ -21,6 +21,17 @@ const statusLabels: Record<ConnectionState, string> = {
   connected: '已连接',
   disconnected: '已断开',
 };
+
+const WindowStateIcon = ({ isMaximized }: { isMaximized: boolean }) => (
+  <svg className="window-state-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    {isMaximized ? (
+      <>
+        <path d="M5.5 5.5v-3h8v8h-3" />
+        <rect x="2.5" y="5.5" width="8" height="8" />
+      </>
+    ) : <rect x="3" y="3" width="10" height="10" />}
+  </svg>
+);
 
 export const AppHeader = (props: AppHeaderProps) => {
   const {
@@ -83,7 +94,7 @@ export const AppHeader = (props: AppHeaderProps) => {
         <Button
           type="text"
           aria-label={isMaximized ? '还原' : '最大化'}
-          icon={isMaximized ? <CopyOutlined /> : <BorderOutlined />}
+          icon={<WindowStateIcon isMaximized={isMaximized} />}
           onClick={onToggleMaximize}
         />
         <Button className="window-close" type="text" aria-label="关闭" icon={<CloseOutlined />} onClick={onCloseWindow} />

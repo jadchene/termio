@@ -296,6 +296,13 @@ select { font: inherit; }
   border-radius: 0;
   color: var(--app-muted);
 }
+.window-state-icon {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
 .window-controls .ant-btn:hover { color: var(--app-fg) !important; background: var(--app-hover) !important; }
 .window-controls .window-close:hover { color: #fff !important; background: #c42b1c !important; }
 
