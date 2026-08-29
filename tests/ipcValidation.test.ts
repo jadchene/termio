@@ -48,6 +48,28 @@ test('session IPC payloads enforce identifiers, ports and field lengths', () => 
   assert.throws(() => parseSession({ ...parsed, id: -1 }, true), /会话 ID/);
 });
 
+test('private-key session IPC requires a key path and normalizes password settings', () => {
+  const parsed = parseSession({
+    folder_id: null,
+    name: 'Key server',
+    host: 'example.com',
+    port: 22,
+    username: 'deploy',
+    auth_type: 'private_key',
+    private_key_path: ' ~/.ssh/id_ed25519 ',
+    passphrase: 'secret',
+    remember_passphrase: 1,
+    password: 'must-not-be-used',
+    remember_password: 1,
+    default_session: 0,
+  }, false);
+  assert.equal(parsed.private_key_path, '~/.ssh/id_ed25519');
+  assert.equal(parsed.remember_password, 0);
+  assert.equal(parsed.remember_passphrase, 1);
+  assert.throws(() => parseSession({ ...parsed, private_key_path: '' }, false), /私钥文件/);
+  assert.throws(() => parseSession({ ...parsed, auth_type: 'agent' }, false), /认证方式/);
+});
+
 test('settings IPC payloads reject unknown fields and invalid ranges', () => {
   const next = validateSettingsPatch({ theme: { terminalFontSize: 20 } }, defaultSettings);
   assert.equal(next.theme.terminalFontSize, 20);

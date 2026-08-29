@@ -114,9 +114,12 @@ export function useSessionTabs(params: UseSessionTabsParams) {
       }
       let retryCount = 0;
       while (true) {
+        const privateKeyAuth = session.auth_type === 'private_key';
         const passwordResult = await askPasswordWithRemember(
-          `会话 ${session.name} 认证失败。\n已重试 ${retryCount} 次，请输入密码继续（取消可终止重连）。`,
-          session.remember_password === 1,
+          privateKeyAuth
+            ? `会话 ${session.name} 的私钥认证失败。\n已重试 ${retryCount} 次，请输入私钥口令继续（未加密私钥或口令无误时请检查服务器公钥配置）。`
+            : `会话 ${session.name} 认证失败。\n已重试 ${retryCount} 次，请输入密码继续（取消可终止重连）。`,
+          privateKeyAuth ? session.remember_passphrase === 1 : session.remember_password === 1,
           '重连认证',
           `ssh-connect:${tabId}`,
         );
@@ -126,26 +129,32 @@ export function useSessionTabs(params: UseSessionTabsParams) {
           setConnectionState(tabId, 'disconnected');
           return;
         }
-        const retryPassword = passwordResult.value;
+        const retrySecret = passwordResult.value;
         retryCount += 1;
         try {
           await window.terminalApi.sshConnect({
             sessionId: session.id,
             connectionId: tabId,
-            password: retryPassword,
-            savePassword: passwordResult.remember,
+            ...(privateKeyAuth
+              ? { passphrase: retrySecret, savePassphrase: passwordResult.remember }
+              : { password: retrySecret, savePassword: passwordResult.remember }),
           });
           if (closedTabIdsRef.current.has(tabId)) {
             await window.terminalApi.sshDisconnect(tabId).catch(() => null);
             return;
           }
-          if (!passwordResult.remember && session.remember_password === 1) {
-            await window.terminalApi.updateSession({ ...session, password: '', remember_password: 0 });
+          if (!passwordResult.remember &&
+            (privateKeyAuth ? session.remember_passphrase === 1 : session.remember_password === 1)) {
+            await window.terminalApi.updateSession(privateKeyAuth
+              ? { ...session, passphrase: '', remember_passphrase: 0 }
+              : { ...session, password: '', remember_password: 0 });
           }
           setSessions((prev) =>
             prev.map((it) => (
               it.id === session.id
-                ? { ...it, password: '', remember_password: passwordResult.remember ? 1 : 0 }
+                ? privateKeyAuth
+                  ? { ...it, passphrase: '', remember_passphrase: passwordResult.remember ? 1 : 0 }
+                  : { ...it, password: '', remember_password: passwordResult.remember ? 1 : 0 }
                 : it
             )),
           );
@@ -201,9 +210,12 @@ export function useSessionTabs(params: UseSessionTabsParams) {
       }
       let retryCount = 0;
       while (true) {
+        const privateKeyAuth = session.auth_type === 'private_key';
         const passwordResult = await askPasswordWithRemember(
-          `会话 ${session.name} 认证失败。\n已重试 ${retryCount} 次，请输入密码继续（取消可终止连接）。`,
-          session.remember_password === 1,
+          privateKeyAuth
+            ? `会话 ${session.name} 的私钥认证失败。\n已重试 ${retryCount} 次，请输入私钥口令继续（未加密私钥或口令无误时请检查服务器公钥配置）。`
+            : `会话 ${session.name} 认证失败。\n已重试 ${retryCount} 次，请输入密码继续（取消可终止连接）。`,
+          privateKeyAuth ? session.remember_passphrase === 1 : session.remember_password === 1,
           '连接认证',
           `ssh-connect:${tabId}`,
         );
@@ -215,14 +227,15 @@ export function useSessionTabs(params: UseSessionTabsParams) {
           await showAlert(`已取消连接，累计重试 ${retryCount} 次。`, '连接已取消');
           return;
         }
-        const retryPassword = passwordResult.value;
+        const retrySecret = passwordResult.value;
         retryCount += 1;
         try {
           await window.terminalApi.sshConnect({
             sessionId: session.id,
             connectionId: tabId,
-            password: retryPassword,
-            savePassword: passwordResult.remember,
+            ...(privateKeyAuth
+              ? { passphrase: retrySecret, savePassphrase: passwordResult.remember }
+              : { password: retrySecret, savePassword: passwordResult.remember }),
           });
           if (closedTabIdsRef.current.has(tabId)) {
             await window.terminalApi.sshDisconnect(tabId).catch(() => null);
@@ -230,13 +243,18 @@ export function useSessionTabs(params: UseSessionTabsParams) {
           }
           disconnectedByTabRef.current.set(tabId, false);
           setConnectionState(tabId, 'connected');
-          if (!passwordResult.remember && session.remember_password === 1) {
-            await window.terminalApi.updateSession({ ...session, password: '', remember_password: 0 });
+          if (!passwordResult.remember &&
+            (privateKeyAuth ? session.remember_passphrase === 1 : session.remember_password === 1)) {
+            await window.terminalApi.updateSession(privateKeyAuth
+              ? { ...session, passphrase: '', remember_passphrase: 0 }
+              : { ...session, password: '', remember_password: 0 });
           }
           setSessions((prev) =>
             prev.map((it) => (
               it.id === session.id
-                ? { ...it, password: '', remember_password: passwordResult.remember ? 1 : 0 }
+                ? privateKeyAuth
+                  ? { ...it, passphrase: '', remember_passphrase: passwordResult.remember ? 1 : 0 }
+                  : { ...it, password: '', remember_password: passwordResult.remember ? 1 : 0 }
                 : it
             )),
           );

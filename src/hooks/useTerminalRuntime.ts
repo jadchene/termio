@@ -5,14 +5,15 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { MutableRefObject } from 'react';
 import type { Settings } from '../types';
 import { getTerminalTheme } from '../utils/terminalTheme';
-import { normalizeTerminalDataInput } from '../utils/terminalInput';
+import { normalizeTerminalDataInput, shouldFlushTerminalInputImmediately } from '../utils/terminalInput';
 import { getTerminalSelectionText } from '../utils/terminalSelection';
 import { appendBoundedUtf8, materializeBoundedUtf8, type BoundedText } from '../utils/boundedText';
 import { disposeTerminalResources } from '../utils/terminalResourceCleanup';
 import { mountTerminal } from '../utils/terminalMount';
 import { canWriteTerminalOutputImmediately } from '../utils/terminalOutput';
+import { TerminalWriteQueue } from '../utils/terminalWriteQueue';
 
-const MAX_TERMINAL_WRITE_CHUNK = 64 * 1024;
+const MAX_TERMINAL_WRITE_CHUNK = 128 * 1024;
 const MAX_PAUSED_OUTPUT_BYTES = 8 * 1024 * 1024;
 const TRUNCATED_OUTPUT_NOTICE = '\r\n\x1b[33m[暂停期间输出超过 8 MiB，已丢弃最旧内容]\x1b[0m\r\n';
 
@@ -32,7 +33,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   const stabilizedFitTimerRef = useRef<Map<number, ReturnType<typeof setTimeout>[]>>(new Map());
   const pausedByScrollRef = useRef<Map<number, boolean>>(new Map());
   const pendingOutputRef = useRef<Map<number, BoundedText>>(new Map());
-  const pendingWriteRef = useRef<Map<number, string>>(new Map());
+  const pendingWriteRef = useRef<Map<number, TerminalWriteQueue>>(new Map());
   const pendingWriteFrameRef = useRef<Map<number, number>>(new Map());
   const pauseSyncFrameRef = useRef<Map<number, number>>(new Map());
   const pendingInputRef = useRef<Map<number, string>>(new Map());
@@ -70,7 +71,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       return;
     }
     if (pendingInputTimerRef.current.has(sessionId)) return;
-    const timer = setTimeout(() => flushPendingInput(sessionId), 4);
+    const timer = setTimeout(() => flushPendingInput(sessionId), 1);
     pendingInputTimerRef.current.set(sessionId, timer);
   }, [flushPendingInput]);
 
@@ -119,17 +120,19 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       target.write(data);
       return;
     }
-    const old = pendingWriteRef.current.get(sessionId) || '';
-    pendingWriteRef.current.set(sessionId, old + data);
+    let queue = pendingWriteRef.current.get(sessionId);
+    if (!queue) {
+      queue = new TerminalWriteQueue();
+      pendingWriteRef.current.set(sessionId, queue);
+    }
+    queue.append(data);
     if (pendingWriteFrameRef.current.has(sessionId)) return;
     const frame = requestAnimationFrame(function flushFrame() {
       pendingWriteFrameRef.current.delete(sessionId);
       const pending = pendingWriteRef.current.get(sessionId);
-      if (!pending) return;
-      const chunk = pending.slice(0, MAX_TERMINAL_WRITE_CHUNK);
-      const rest = pending.slice(MAX_TERMINAL_WRITE_CHUNK);
-      if (rest) {
-        pendingWriteRef.current.set(sessionId, rest);
+      if (!pending || pending.length === 0) return;
+      const chunk = pending.take(MAX_TERMINAL_WRITE_CHUNK);
+      if (pending.length > 0) {
         const nextFrame = requestAnimationFrame(flushFrame);
         pendingWriteFrameRef.current.set(sessionId, nextFrame);
       } else {
@@ -300,7 +303,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
         queueInput(
           sessionId,
           normalizedInput,
-          normalizedInput.length <= 1 || normalizedInput.includes('\r') || normalizedInput.includes('\n'),
+          shouldFlushTerminalInputImmediately(normalizedInput),
         );
       });
       term.onResize(({ cols, rows }) => {

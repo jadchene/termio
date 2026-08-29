@@ -81,8 +81,12 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
         host: target.host,
         port: target.port,
         username: target.username,
+        auth_type: target.auth_type,
         password: '',
         remember_password: target.remember_password,
+        private_key_path: target.private_key_path,
+        passphrase: '',
+        remember_passphrase: target.remember_passphrase,
         default_session: target.default_session,
       });
     } else {
@@ -119,7 +123,8 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onConfirmSessionModal = async () => {
-    if (!sessionForm.name || !sessionForm.host || !sessionForm.username) {
+    if (!sessionForm.name || !sessionForm.host || !sessionForm.username ||
+      (sessionForm.auth_type === 'private_key' && !sessionForm.private_key_path.trim())) {
       await showAlert('请填写完整信息');
       return;
     }
@@ -164,8 +169,12 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
         host: target.host,
         port: target.port,
         username: target.username,
+        auth_type: target.auth_type,
         password: '',
         remember_password: 0,
+        private_key_path: target.private_key_path,
+        passphrase: '',
+        remember_passphrase: 0,
         default_session: 0,
       });
       await loadSessionData();

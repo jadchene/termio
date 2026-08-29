@@ -11,6 +11,7 @@ import type { Session } from '../electron/main/types';
 function createDependencies() {
   let nextId = 0;
   const passwords = new Map<number, string>();
+  const passphrases = new Map<number, string>();
   let queue = Promise.resolve();
   const dependencies: SessionPersistenceDependencies = {
     withTransaction: async <T>(work: (transaction: DatabaseTransaction) => Promise<T>) => {
@@ -33,8 +34,11 @@ function createDependencies() {
     getPassword: async (id) => passwords.get(id) ?? null,
     setPassword: async (id, password) => { passwords.set(id, password); },
     deletePassword: async (id) => { passwords.delete(id); },
+    getPassphrase: async (id) => passphrases.get(id) ?? null,
+    setPassphrase: async (id, passphrase) => { passphrases.set(id, passphrase); },
+    deletePassphrase: async (id) => { passphrases.delete(id); },
   };
-  return { dependencies, passwords };
+  return { dependencies, passwords, passphrases };
 }
 
 function session(index: number): Session {
@@ -45,8 +49,12 @@ function session(index: number): Session {
     host: `host-${index}.example`,
     port: 22,
     username: 'root',
+    auth_type: 'password',
     password: `password-${index}`,
     remember_password: 1,
+    private_key_path: '',
+    passphrase: '',
+    remember_passphrase: 0,
     default_session: index === 0 ? 1 : 0,
   };
 }
@@ -58,6 +66,22 @@ test('50 concurrent session creates bind every password to its own inserted ID',
   )));
   assert.equal(new Set(ids).size, 50);
   ids.forEach((id, index) => assert.equal(passwords.get(id), `password-${index}`));
+});
+
+test('private-key passphrases are stored separately from passwords', async () => {
+  const { dependencies, passwords, passphrases } = createDependencies();
+  const payload: Session = {
+    ...session(1),
+    auth_type: 'private_key',
+    password: '',
+    remember_password: 0,
+    private_key_path: '/keys/id_ed25519',
+    passphrase: 'key-secret',
+    remember_passphrase: 1,
+  };
+  const id = await createSessionRecord(payload, dependencies);
+  assert.equal(passwords.has(id), false);
+  assert.equal(passphrases.get(id), 'key-secret');
 });
 
 test('failed commit removes a password written before the rollback', async () => {

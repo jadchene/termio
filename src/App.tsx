@@ -41,8 +41,12 @@ const defaultSessionForm: SessionForm = {
   host: '',
   port: 22,
   username: 'root',
+  auth_type: 'password',
   password: '',
   remember_password: 1,
+  private_key_path: '',
+  passphrase: '',
+  remember_passphrase: 0,
   default_session: 0,
 };
 
@@ -52,7 +56,10 @@ function isAuthError(message: string): boolean {
     text.includes('all configured authentication methods failed') ||
     text.includes('authentication failure') ||
     text.includes('permission denied') ||
-    text.includes('auth fail')
+    text.includes('auth fail') ||
+    text.includes('bad passphrase') ||
+    text.includes('no passphrase given') ||
+    text.includes('private key is encrypted')
   );
 }
 

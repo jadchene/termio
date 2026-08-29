@@ -41,8 +41,12 @@ export type Session = {
   host: string;
   port: number;
   username: string;
+  auth_type: 'password' | 'private_key';
   password: string;
   remember_password: number;
+  private_key_path: string;
+  passphrase: string;
+  remember_passphrase: number;
   default_session: number;
 };
 
@@ -197,8 +201,16 @@ declare global {
       createSession: (payload: Omit<Session, 'id'>) => Promise<boolean>;
       updateSession: (payload: Session) => Promise<boolean>;
       deleteSession: (sessionId: number) => Promise<boolean>;
+      pickPrivateKey: (defaultPath?: string) => Promise<string>;
 
-      sshConnect: (payload: { sessionId: number; connectionId?: number; password?: string; savePassword?: boolean } | number) => Promise<boolean>;
+      sshConnect: (payload: {
+        sessionId: number;
+        connectionId?: number;
+        password?: string;
+        savePassword?: boolean;
+        passphrase?: string;
+        savePassphrase?: boolean;
+      } | number) => Promise<boolean>;
       sshSendInput: (payload: { sessionId: number; input: string }) => void;
       sshSend: (payload: { sessionId: number; input: string }) => Promise<boolean>;
       sshResize: (payload: { sessionId: number; cols: number; rows: number }) => Promise<boolean>;

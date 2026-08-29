@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('terminalApi', {
   createSession: (payload) => ipcRenderer.invoke('session:create', payload),
   updateSession: (payload) => ipcRenderer.invoke('session:update', payload),
   deleteSession: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
+  pickPrivateKey: (defaultPath) => ipcRenderer.invoke('dialog:pick-private-key', defaultPath),
 
   sshConnect: (payload) => ipcRenderer.invoke('ssh:connect', payload),
   sshSendInput: (payload) => ipcRenderer.send('ssh:input', payload),

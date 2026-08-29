@@ -11,8 +11,12 @@ function session(id: number, password: string, rememberPassword = 1): Session {
     host: 'host.example',
     port: 22,
     username: 'root',
+    auth_type: 'password',
     password,
     remember_password: rememberPassword,
+    private_key_path: '',
+    passphrase: '',
+    remember_passphrase: 0,
     default_session: 0,
   };
 }

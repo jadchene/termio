@@ -698,6 +698,8 @@ body.theme-light .theme-segmented .ant-segmented-thumb {
 .session-form .ant-form-item { margin-bottom: 14px; }
 .form-grid-two { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 12px; }
 .form-grid-two .ant-input-number { width: 100%; }
+.private-key-picker { display: flex; gap: 8px; }
+.private-key-picker .ant-input { min-width: 0; }
 .form-check-row { display: flex; gap: 24px; }
 .folder-select { width: 100%; }
 

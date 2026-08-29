@@ -6,6 +6,14 @@ export const REMOTE_SHELL_CWD_COMMAND = 'sh -c \'connection=${SSH_CONNECTION-}; 
 
 export const stripAnsi = (input: string): string => input.replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '');
 
+export const shouldInspectCwdOutput = (previousTail: string, shellChunk: string): boolean => {
+  const suffix = `${previousTail.slice(-128)}${shellChunk.slice(-512)}`;
+  if (suffix.includes('\x1b]7;file://')) return true;
+  // The currently supported prompt format always ends in `] $` or `] #`.
+  // Avoid scanning every full-screen redraw from Vim and other TUI programs.
+  return /\]\s*[#$]\s*$/.test(stripAnsi(suffix));
+};
+
 export const resolveHomeToken = (connectionId: number, tokenPath: string): string => {
   const session = connectionSessionMap.get(connectionId);
   const fallbackHome = session?.username === 'root' ? '/root' : session?.username ? `/home/${session.username}` : '/';
@@ -25,8 +33,10 @@ const decodeOscPath = (rawPath: string): string => {
 
 export const updateCwdFromPrompt = (connectionId: number, shellChunk: string): void => {
   const previousTail = cwdOutputTailMap.get(connectionId) || '';
-  const tail = `${previousTail}${shellChunk}`.slice(-8192);
+  const combined = `${previousTail}${shellChunk.slice(-8192)}`;
+  const tail = combined.slice(-8192);
   cwdOutputTailMap.set(connectionId, tail.slice(-4096));
+  if (!shouldInspectCwdOutput(previousTail, shellChunk)) return;
 
   const oscPattern = /\x1b\]7;file:\/\/[^/\x07\x1b]*(\/[^\x07\x1b]*)(?:\x07|\x1b\\)/g;
   let oscMatch: RegExpExecArray | null;
