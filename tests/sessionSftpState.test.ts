@@ -14,5 +14,6 @@ test('SFTP navigation state remains isolated by connection tab', () => {
     pathInput: '~',
     items: [],
     selectedPaths: [],
+    loading: false,
   });
 });

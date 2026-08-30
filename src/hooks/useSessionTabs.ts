@@ -7,7 +7,6 @@ import type { ConnectionState } from '../types';
 type Tab = { id: number; sessionId: number; title: string };
 
 type UseSessionTabsParams = {
-  tabs: Tab[];
   activeSessionId: number | null;
   setTabs: Dispatch<SetStateAction<Tab[]>>;
   setActiveSessionId: Dispatch<SetStateAction<number | null>>;
@@ -42,7 +41,6 @@ type UseSessionTabsParams = {
 
 export function useSessionTabs(params: UseSessionTabsParams) {
   const {
-    tabs,
     activeSessionId,
     setTabs,
     setActiveSessionId,
@@ -178,7 +176,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
 
   const connectSession = async (session: Session, forceNew = false) => {
     if (!forceNew) {
-      const existing = tabs.find((it) => it.sessionId === session.id);
+      const existing = tabsRef.current.find((it) => it.sessionId === session.id);
       if (existing) {
         setActiveSessionId(existing.id);
         return;
@@ -186,8 +184,22 @@ export function useSessionTabs(params: UseSessionTabsParams) {
     }
     const tabId = Date.now() + nextTabIdRef.current;
     nextTabIdRef.current += 1;
-    setTabs((prev) => [...prev, { id: tabId, sessionId: session.id, title: session.name }]);
+    const previousActiveSessionId = activeSessionIdRef.current;
+    const removeFailedTab = () => {
+      tabsRef.current = tabsRef.current.filter((it) => it.id !== tabId);
+      setTabs((prev) => prev.filter((it) => it.id !== tabId));
+      setConnectionState(tabId, null);
+      setActiveSessionId((current) => current === tabId
+        ? tabsRef.current.some((it) => it.id === previousActiveSessionId)
+          ? previousActiveSessionId
+          : tabsRef.current.at(-1)?.id ?? null
+        : current);
+    };
+    const newTab = { id: tabId, sessionId: session.id, title: session.name };
+    tabsRef.current = [...tabsRef.current, newTab];
+    setTabs((prev) => prev.some((it) => it.id === tabId) ? prev : [...prev, newTab]);
     setConnectionState(tabId, 'connecting');
+    setActiveSessionId(tabId);
     try {
       await window.terminalApi.sshConnect({ sessionId: session.id, connectionId: tabId });
       if (closedTabIdsRef.current.has(tabId)) {
@@ -202,9 +214,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
       if (wasConnectionCancelled(tabId, error)) return;
       const message = String(error);
       if (!isAuthError(message)) {
-        setTabs((prev) => prev.filter((it) => it.id !== tabId));
-        setConnectionState(tabId, null);
-        if (activeSessionId === tabId) setActiveSessionId(null);
+        removeFailedTab();
         if (!isHostKeyMismatchError(message)) await showAlert(message, '连接失败');
         return;
       }
@@ -221,9 +231,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
         );
         if (closedTabIdsRef.current.has(tabId)) return;
         if (!passwordResult?.value) {
-          setTabs((prev) => prev.filter((it) => it.id !== tabId));
-          setConnectionState(tabId, null);
-          if (activeSessionId === tabId) setActiveSessionId(null);
+          removeFailedTab();
           await showAlert(`已取消连接，累计重试 ${retryCount} 次。`, '连接已取消');
           return;
         }
@@ -265,9 +273,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
           if (wasConnectionCancelled(tabId, retryError)) return;
           const retryMessage = String(retryError);
           if (!isAuthError(retryMessage)) {
-            setTabs((prev) => prev.filter((it) => it.id !== tabId));
-            setConnectionState(tabId, null);
-            if (activeSessionId === tabId) setActiveSessionId(null);
+            removeFailedTab();
             if (!isHostKeyMismatchError(retryMessage)) await showAlert(retryMessage, '连接失败');
             return;
           }

@@ -98,7 +98,7 @@ export function useSessionLifecycle(params: UseSessionLifecycleParams) {
   ]);
 
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || sidebarTab !== 'sftp' || !settings?.ui.sidebarVisible) return;
     if (hasSftpSessionState(activeSessionId)) return;
     let cancelled = false;
     void (async () => {
@@ -123,7 +123,7 @@ export function useSessionLifecycle(params: UseSessionLifecycleParams) {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, setSftpPath, clearSftpSelection, hasSftpSessionState, refreshSftp, reportSftpError]);
+  }, [activeSessionId, sidebarTab, settings?.ui.sidebarVisible, setSftpPath, clearSftpSelection, hasSftpSessionState, refreshSftp, reportSftpError]);
 
   useEffect(() => {
     const metricsSessionId = resolveMetricsSessionId(
@@ -150,7 +150,7 @@ export function useSessionLifecycle(params: UseSessionLifecycleParams) {
   }, [activeSessionId, settings?.ui.sidebarVisible, terminalContainerRef, fitTerminalStabilized]);
 
   useEffect(() => {
-    if (!settings || !activeSessionId) return;
+    if (!settings || !activeSessionId || sidebarTab !== 'sftp' || !settings.ui.sidebarVisible || !hasSftpSessionState(activeSessionId)) return;
     let cancelled = false;
     void refreshSftp().catch(async (error) => {
       if (!cancelled) await reportSftpError(error);
@@ -158,10 +158,10 @@ export function useSessionLifecycle(params: UseSessionLifecycleParams) {
     return () => {
       cancelled = true;
     };
-  }, [settings?.ui.showHiddenFiles, activeSessionId, refreshSftp, reportSftpError]);
+  }, [settings?.ui.showHiddenFiles, settings?.ui.sidebarVisible, sidebarTab, activeSessionId, hasSftpSessionState, refreshSftp, reportSftpError]);
 
   useEffect(() => {
-    if (!settings || !activeSessionId || sidebarTab !== 'sftp') return;
+    if (!settings || !activeSessionId || sidebarTab !== 'sftp' || !settings.ui.sidebarVisible || !hasSftpSessionState(activeSessionId)) return;
     let cancelled = false;
     void refreshSftp().catch(async (error) => {
       if (!cancelled) await reportSftpError(error);
@@ -169,7 +169,7 @@ export function useSessionLifecycle(params: UseSessionLifecycleParams) {
     return () => {
       cancelled = true;
     };
-  }, [sidebarTab, activeSessionId, refreshSftp, reportSftpError]);
+  }, [sidebarTab, activeSessionId, settings?.ui.sidebarVisible, hasSftpSessionState, refreshSftp, reportSftpError]);
 
   useEffect(() => {
     if (!activeSessionId) {

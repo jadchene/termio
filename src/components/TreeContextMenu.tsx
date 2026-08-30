@@ -1,7 +1,9 @@
 import type { TreeContextMenu as TreeContextMenuState } from '../types';
+import { clampContextMenuPosition } from '../utils/contextMenuPosition';
 
 type TreeContextMenuProps = {
   menu: TreeContextMenuState | null;
+  onOpenNewSession: (menu: Extract<TreeContextMenuState, { type: 'session' }>) => Promise<void>;
   onCopySession: (menu: Extract<TreeContextMenuState, { type: 'session' }>) => Promise<void>;
   onEditSession: (menu: Extract<TreeContextMenuState, { type: 'session' }>) => void;
   onDeleteSession: (menu: Extract<TreeContextMenuState, { type: 'session' }>) => Promise<void>;
@@ -17,6 +19,7 @@ type TreeContextMenuProps = {
 export function TreeContextMenu(props: TreeContextMenuProps) {
   const {
     menu,
+    onOpenNewSession,
     onCopySession,
     onEditSession,
     onDeleteSession,
@@ -29,31 +32,33 @@ export function TreeContextMenu(props: TreeContextMenuProps) {
     onDeleteSftp,
   } = props;
   if (!menu) return null;
+  const position = clampContextMenuPosition(menu.x, menu.y, window.innerWidth, window.innerHeight);
 
   return (
-    <div className="tree-context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+    <div className="tree-context-menu" role="menu" style={position} onClick={(e) => e.stopPropagation()}>
       {menu.type === 'session' ? (
         <>
-          <button onClick={() => void onCopySession(menu)}>复制</button>
-          <button onClick={() => onEditSession(menu)}>编辑</button>
-          <button className="danger" onClick={() => void onDeleteSession(menu)}>
+          <button role="menuitem" autoFocus onClick={() => void onOpenNewSession(menu)}>新建连接</button>
+          <button role="menuitem" onClick={() => void onCopySession(menu)}>复制</button>
+          <button role="menuitem" onClick={() => onEditSession(menu)}>编辑</button>
+          <button role="menuitem" className="danger" onClick={() => void onDeleteSession(menu)}>
             删除
           </button>
         </>
       ) : menu.type === 'folder' ? (
         <>
-          <button onClick={() => onCreateSessionInFolder(menu)}>新增会话</button>
-          <button onClick={() => onCreateFolderInFolder(menu)}>新增目录</button>
-          <button onClick={() => void onEditFolder(menu)}>编辑</button>
-          <button className="danger" onClick={() => void onDeleteFolder(menu)}>
+          <button role="menuitem" autoFocus onClick={() => onCreateSessionInFolder(menu)}>新增会话</button>
+          <button role="menuitem" onClick={() => onCreateFolderInFolder(menu)}>新增目录</button>
+          <button role="menuitem" onClick={() => void onEditFolder(menu)}>编辑</button>
+          <button role="menuitem" className="danger" onClick={() => void onDeleteFolder(menu)}>
             删除
           </button>
         </>
       ) : (
         <>
-          <button onClick={() => void onDownloadSftp(menu)}>下载</button>
-          <button onClick={() => void onRenameSftp(menu)}>重命名</button>
-          <button className="danger" onClick={() => void onDeleteSftp(menu)}>
+          <button role="menuitem" autoFocus onClick={() => void onDownloadSftp(menu)}>下载</button>
+          <button role="menuitem" onClick={() => void onRenameSftp(menu)}>重命名</button>
+          <button role="menuitem" className="danger" onClick={() => void onDeleteSftp(menu)}>
             删除
           </button>
         </>

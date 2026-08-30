@@ -60,7 +60,12 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
       .sort(compareByNameThenId)
       .map((session) => (
         <div key={session.id} className="session-node" onContextMenu={(e) => onOpenSessionMenu(e, session)}>
-          <button className="link-btn tree-row-btn" onContextMenu={(e) => onOpenSessionMenu(e, session)} onClick={() => null} onDoubleClick={() => onOpenSession(session)}>
+          <button
+            className="link-btn tree-row-btn"
+            title={`${session.name} — ${session.username}@${session.host}:${session.port}`}
+            onContextMenu={(e) => onOpenSessionMenu(e, session)}
+            onClick={() => onOpenSession(session)}
+          >
             <TerminalIcon />
             <span className="session-tree-name">{session.name}</span>
           </button>
@@ -73,13 +78,13 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
       .sort(compareByNameThenId)
       .map((folder) => (
         <div key={folder.id} className="folder-node">
-          <div className="folder-title" onClick={() => onToggleFolder(folder.id)} onContextMenu={(e) => onOpenFolderMenu(e, folder)}>
+          <button className="folder-title" aria-expanded={expandedFolderIds.has(folder.id)} onClick={() => onToggleFolder(folder.id)} onContextMenu={(e) => onOpenFolderMenu(e, folder)}>
             <span className="folder-toggle-icon" aria-hidden="true">
               {expandedFolderIds.has(folder.id) ? <DownOutlined /> : <RightOutlined />}
             </span>
             <FolderOutlined className="folder-type-icon" />
             <span className="folder-tree-name">{folder.name}</span>
-          </div>
+          </button>
           {expandedFolderIds.has(folder.id) && (
             <div className="folder-children">
               {renderSessionList(folder.id)}
@@ -92,8 +97,8 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
   return (
     <div className="tree-content panel-content">
       <div className="sidebar-actions">
-        <Tooltip title="新建目录"><Button type="text" size="small" icon={<FolderAddOutlined />} onClick={onCreateFolder} /></Tooltip>
-        <Tooltip title="新建会话"><Button type="text" size="small" icon={<PlusOutlined />} onClick={onCreateSession} /></Tooltip>
+        <Tooltip title="新建目录"><Button aria-label="新建目录" type="text" size="small" icon={<FolderAddOutlined />} onClick={onCreateFolder} /></Tooltip>
+        <Tooltip title="新建会话"><Button aria-label="新建会话" type="text" size="small" icon={<PlusOutlined />} onClick={onCreateSession} /></Tooltip>
       </div>
       <div className="tree-scroll">
         {sessions.length === 0 && folders.length === 0

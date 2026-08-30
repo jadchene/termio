@@ -1,5 +1,6 @@
 import { EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Checkbox, Form, Input, InputNumber, Modal, Radio, TreeSelect } from 'antd';
+import { useEffect, useRef, useState } from 'react';
 import type { FolderTreeOption } from '../hooks/useFolderTreeOptions';
 import type { Session } from '../types';
 
@@ -16,8 +17,9 @@ type SessionModalProps = {
   onTogglePassword: () => void;
   onToggleFolderMenu: () => void;
   onPickFolder: (folderId: number | null) => void;
+  onPickPrivateKey: (defaultPath: string) => Promise<string>;
   onCancel: () => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: () => Promise<boolean>;
 };
 
 export const SessionModal = (props: SessionModalProps) => {
@@ -32,39 +34,96 @@ export const SessionModal = (props: SessionModalProps) => {
     onTogglePassword,
     onToggleFolderMenu,
     onPickFolder,
+    onPickPrivateKey,
     onCancel,
     onConfirm,
   } = props;
+  const nameInputRef = useRef<import('antd').InputRef>(null);
+  const hostInputRef = useRef<import('antd').InputRef>(null);
+  const usernameInputRef = useRef<import('antd').InputRef>(null);
+  const privateKeyInputRef = useRef<import('antd').InputRef>(null);
+  const [attempted, setAttempted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pickingKey, setPickingKey] = useState(false);
+
+  useEffect(() => {
+    if (!show) return;
+    setAttempted(false);
+    setSaving(false);
+    setPickingKey(false);
+    requestAnimationFrame(() => nameInputRef.current?.focus({ cursor: 'end' }));
+  }, [show]);
+
+  const missingName = !form.name.trim();
+  const missingHost = !form.host.trim();
+  const missingUsername = !form.username.trim();
+  const missingPrivateKey = form.auth_type === 'private_key' && !form.private_key_path.trim();
+
+  const submit = async () => {
+    if (saving) return;
+    setAttempted(true);
+    if (missingName || missingHost || missingUsername || missingPrivateKey) {
+      requestAnimationFrame(() => {
+        if (missingName) nameInputRef.current?.focus();
+        else if (missingHost) hostInputRef.current?.focus();
+        else if (missingUsername) usernameInputRef.current?.focus();
+        else privateKeyInputRef.current?.focus();
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      await onConfirm();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Modal
       open={show}
+      className="session-modal"
       title={editing ? '编辑会话' : '新建会话'}
       centered
       mask={{ closable: false }}
-      onCancel={onCancel}
+      closable={!saving}
+      keyboard={!saving}
+      onCancel={() => {
+        if (!saving) onCancel();
+      }}
       footer={[
-        <Button key="cancel" onClick={onCancel}>取消</Button>,
-        <Button key="confirm" type="primary" onClick={() => void onConfirm()}>确认</Button>,
+        <Button key="cancel" disabled={saving} onClick={onCancel}>取消</Button>,
+        <Button key="confirm" type="primary" loading={saving} onClick={() => void submit()}>{editing ? '保存' : '创建'}</Button>,
       ]}
     >
-      <Form layout="vertical" colon={false} className="session-form">
-        <Form.Item label="名称" required>
-          <Input value={form.name} onChange={(event) => onChangeForm({ ...form, name: event.target.value })} />
+      <Form
+        layout="vertical"
+        colon={false}
+        className="session-form"
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+          const target = event.target as HTMLElement;
+          if (target.closest('button, [role="button"], .ant-select')) return;
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <Form.Item label="名称" required validateStatus={attempted && missingName ? 'error' : undefined} help={attempted && missingName ? '请输入会话名称' : undefined}>
+          <Input ref={nameInputRef} value={form.name} onChange={(event) => onChangeForm({ ...form, name: event.target.value })} />
         </Form.Item>
         <div className="form-grid-two">
-          <Form.Item label="主机" required>
-            <Input value={form.host} onChange={(event) => onChangeForm({ ...form, host: event.target.value })} />
+          <Form.Item label="主机" required validateStatus={attempted && missingHost ? 'error' : undefined} help={attempted && missingHost ? '请输入主机地址' : undefined}>
+            <Input ref={hostInputRef} value={form.host} placeholder="IP 地址或域名" onChange={(event) => onChangeForm({ ...form, host: event.target.value })} />
           </Form.Item>
           <Form.Item label="端口">
             <InputNumber min={1} max={65535} value={form.port} onChange={(value) => onChangeForm({ ...form, port: value ?? 22 })} />
           </Form.Item>
         </div>
-        <Form.Item label="用户名" required>
-          <Input value={form.username} onChange={(event) => onChangeForm({ ...form, username: event.target.value })} />
+        <Form.Item label="用户名" required validateStatus={attempted && missingUsername ? 'error' : undefined} help={attempted && missingUsername ? '请输入用户名' : undefined}>
+          <Input ref={usernameInputRef} value={form.username} onChange={(event) => onChangeForm({ ...form, username: event.target.value })} />
         </Form.Item>
         <Form.Item label="认证方式">
-          <Radio.Group
+          <Radio.Group className="auth-method-picker"
             optionType="button"
             buttonStyle="solid"
             value={form.auth_type}
@@ -95,17 +154,19 @@ export const SessionModal = (props: SessionModalProps) => {
           </Form.Item>
         ) : (
           <>
-            <Form.Item label="私钥文件" required extra="支持 OpenSSH / PEM 私钥；私钥内容只在连接时读取，不会写入数据库。">
+            <Form.Item label="私钥文件" required validateStatus={attempted && missingPrivateKey ? 'error' : undefined} help={attempted && missingPrivateKey ? '请选择或输入私钥文件路径' : undefined} extra="支持 OpenSSH / PEM 私钥；私钥内容只在连接时读取，不会写入数据库。">
               <div className="private-key-picker">
                 <Input
+                  ref={privateKeyInputRef}
                   value={form.private_key_path}
                   placeholder="例如 ~/.ssh/id_ed25519"
                   onChange={(event) => onChangeForm({ ...form, private_key_path: event.target.value })}
                 />
-                <Button onClick={() => {
-                  void window.terminalApi.pickPrivateKey(form.private_key_path).then((selected) => {
+                <Button loading={pickingKey} onClick={() => {
+                  setPickingKey(true);
+                  void onPickPrivateKey(form.private_key_path).then((selected) => {
                     if (selected) onChangeForm({ ...form, private_key_path: selected });
-                  });
+                  }).finally(() => setPickingKey(false));
                 }}>浏览…</Button>
               </div>
             </Form.Item>

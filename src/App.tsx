@@ -265,6 +265,7 @@ export default function App() {
     setSftpPathInput,
     sftpItems,
     selectedSftpPaths,
+    sftpLoading,
     sftpUploadDropOver,
     setSftpUploadDropOver,
     refreshSftp,
@@ -340,7 +341,6 @@ export default function App() {
   });
 
   const { reconnectTab, connectSession, closeTab } = useSessionTabs({
-    tabs,
     activeSessionId,
     setTabs,
     setActiveSessionId,
@@ -478,6 +478,7 @@ export default function App() {
     askConfirm,
     askPrompt,
     showAlert,
+    connectSession,
   });
 
   const settingsActions = useSettingsActions({
@@ -563,6 +564,7 @@ export default function App() {
           sftpPathInput={sftpPathInput}
           sftpItems={sftpItems}
           selectedSftpPaths={selectedSftpPaths}
+          sftpLoading={sftpLoading}
           dropOver={sftpUploadDropOver}
           transferRows={currentTransferRows}
           formatSftpMeta={formatSftpMeta}
@@ -594,6 +596,7 @@ export default function App() {
         <TerminalZone
           activeSessionId={activeSessionId}
           pausedOutput={pausedOutput}
+          connectionState={activeSessionId == null ? null : connectionStates[activeSessionId] ?? 'connecting'}
           settings={settings}
           showAlert={showAlert}
           terminalContainerRef={terminalContainerRef}

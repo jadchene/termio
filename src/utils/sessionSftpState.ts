@@ -5,6 +5,7 @@ export type SessionSftpState = {
   pathInput: string;
   items: SftpItem[];
   selectedPaths: string[];
+  loading: boolean;
 };
 
 export const createSessionSftpState = (): SessionSftpState => ({
@@ -12,6 +13,7 @@ export const createSessionSftpState = (): SessionSftpState => ({
   pathInput: '~',
   items: [],
   selectedPaths: [],
+  loading: false,
 });
 
 export const updateSessionSftpState = (

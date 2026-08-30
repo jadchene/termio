@@ -59,13 +59,15 @@ type ModalHostProps = {
     onToggleSessionPassword: () => void;
     onToggleSessionFolderMenu: () => void;
     onPickSessionFolder: (folderId: number | null) => void;
+    onPickPrivateKey: (defaultPath: string) => Promise<string>;
     onCancelSessionModal: () => void;
-    onConfirmSessionModal: () => Promise<void>;
+    onConfirmSessionModal: () => Promise<boolean>;
     onToggleFolderParentMenu: () => void;
     onPickFolderParent: (folderId: number | null) => void;
     onCancelFolderModal: () => void;
     onConfirmFolderModal: () => Promise<void>;
     onCopySessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => Promise<void>;
+    onOpenNewSessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => Promise<void>;
     onEditSessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => void;
     onDeleteSessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => Promise<void>;
     onCreateSessionInFolderMenu: (menu: Extract<TreeContextMenu, { type: 'folder' }>) => void;
@@ -137,6 +139,7 @@ export function ModalHost(props: ModalHostProps) {
         onTogglePassword={sessionTreeActions.onToggleSessionPassword}
         onToggleFolderMenu={sessionTreeActions.onToggleSessionFolderMenu}
         onPickFolder={sessionTreeActions.onPickSessionFolder}
+        onPickPrivateKey={sessionTreeActions.onPickPrivateKey}
         onCancel={sessionTreeActions.onCancelSessionModal}
         onConfirm={sessionTreeActions.onConfirmSessionModal}
       />
@@ -172,6 +175,7 @@ export function ModalHost(props: ModalHostProps) {
 
       <TreeContextMenuComponent
         menu={treeMenu}
+        onOpenNewSession={sessionTreeActions.onOpenNewSessionMenu}
         onCopySession={sessionTreeActions.onCopySessionMenu}
         onEditSession={sessionTreeActions.onEditSessionMenu}
         onDeleteSession={sessionTreeActions.onDeleteSessionMenu}

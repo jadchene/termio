@@ -31,6 +31,7 @@ export function useSftpPanel(params: UseSftpPanelParams) {
     pathInput: sftpPathInput,
     items: sftpItems,
     selectedPaths: selectedSftpPaths,
+    loading: sftpLoading,
   } = activeState;
 
   const updateSessionState = useCallback((
@@ -74,21 +75,36 @@ export function useSftpPanel(params: UseSftpPanelParams) {
     const requestSequence = (listRequestSequenceRef.current.get(sessionId) ?? 0) + 1;
     listRequestSequenceRef.current.set(sessionId, requestSequence);
     const target = pathInput ?? sessionStateByIdRef.current.get(sessionId)?.path ?? '~';
-    const response = await window.terminalApi.sftpList({
-      sessionId,
-      requestSequence,
-      path: target,
-      showHidden: showHiddenFilesRef.current,
-    });
+    updateSessionState(sessionId, (current) => ({ ...current, loading: true }));
+    let response;
+    try {
+      response = await window.terminalApi.sftpList({
+        sessionId,
+        requestSequence,
+        path: target,
+        showHidden: showHiddenFilesRef.current,
+      });
+    } catch (error) {
+      if (listRequestSequenceRef.current.get(sessionId) === requestSequence) {
+        updateSessionState(sessionId, (current) => ({ ...current, loading: false }));
+      }
+      throw error;
+    }
     if (!isLatestSessionRequest(
       activeSessionIdRef.current,
       response.sessionId,
       listRequestSequenceRef.current.get(sessionId) ?? 0,
       response.requestSequence,
-    )) return false;
+    )) {
+      if (listRequestSequenceRef.current.get(sessionId) === requestSequence) {
+        updateSessionState(sessionId, (current) => ({ ...current, loading: false }));
+      }
+      return false;
+    }
     const list = response.items;
     updateSessionState(sessionId, (current) => ({
       ...current,
+      loading: false,
       items: list,
       selectedPaths: current.selectedPaths.filter((it) => (
         list.some((item) => `${target.replace(/\/$/, '')}/${item.name}` === it)
@@ -209,6 +225,7 @@ export function useSftpPanel(params: UseSftpPanelParams) {
     setSftpPathInput,
     sftpItems,
     selectedSftpPaths,
+    sftpLoading,
     sftpUploadDropOver,
     setSftpUploadDropOver,
     refreshSftp,

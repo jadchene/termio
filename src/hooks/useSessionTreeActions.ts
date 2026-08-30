@@ -36,6 +36,7 @@ type UseSessionTreeActionsParams = {
   askConfirm: (message: string, title?: string) => Promise<boolean>;
   askPrompt: (message: string, initialValue?: string, title?: string) => Promise<string | null>;
   showAlert: (message: string, title?: string) => Promise<void>;
+  connectSession: (session: Session, forceNew?: boolean) => Promise<void>;
 };
 
 export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
@@ -60,6 +61,7 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     askConfirm,
     askPrompt,
     showAlert,
+    connectSession,
   } = params;
 
   const runMutation = async (action: () => Promise<void>, title: string): Promise<boolean> => {
@@ -123,19 +125,28 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onConfirmSessionModal = async () => {
-    if (!sessionForm.name || !sessionForm.host || !sessionForm.username ||
+    if (!sessionForm.name.trim() || !sessionForm.host.trim() || !sessionForm.username.trim() ||
       (sessionForm.auth_type === 'private_key' && !sessionForm.private_key_path.trim())) {
-      await showAlert('请填写完整信息');
-      return;
+      return false;
     }
     const saved = await runMutation(async () => {
       if (editingSession) await window.terminalApi.updateSession({ id: editingSession.id, ...sessionForm });
       else await window.terminalApi.createSession(sessionForm);
       await loadSessionData();
     }, '保存会话失败');
-    if (!saved) return;
+    if (!saved) return false;
     setSessionFolderMenuOpen(false);
     setShowSessionModal(false);
+    return true;
+  };
+
+  const onPickPrivateKey = async (defaultPath: string): Promise<string> => {
+    try {
+      return await window.terminalApi.pickPrivateKey(defaultPath || undefined);
+    } catch (error) {
+      await showAlert(error instanceof Error ? error.message : String(error), '选择私钥失败');
+      return '';
+    }
   };
 
   const onConfirmFolderModal = async () => {
@@ -180,6 +191,12 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
       await loadSessionData();
     }, '复制会话失败');
     setTreeMenu(null);
+  };
+
+  const onOpenNewSessionMenu = async (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
+    const target = sessions.find((session) => session.id === menu.id);
+    setTreeMenu(null);
+    if (target) await connectSession(target, true);
   };
 
   const onEditSessionMenu = (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
@@ -242,6 +259,7 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     onToggleSessionPassword: () => setShowSessionPassword((v) => !v),
     onToggleSessionFolderMenu: () => setSessionFolderMenuOpen((v) => !v),
     onPickSessionFolder,
+    onPickPrivateKey,
     onCancelSessionModal: () => {
       setSessionFolderMenuOpen(false);
       setShowSessionModal(false);
@@ -258,6 +276,7 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     },
     onConfirmFolderModal,
     onCopySessionMenu,
+    onOpenNewSessionMenu,
     onEditSessionMenu,
     onDeleteSessionMenu,
     onCreateSessionInFolderMenu,

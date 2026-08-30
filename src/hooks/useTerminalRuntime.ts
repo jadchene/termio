@@ -35,7 +35,12 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   const pendingOutputRef = useRef<Map<number, BoundedText>>(new Map());
   const pendingWriteRef = useRef<Map<number, TerminalWriteQueue>>(new Map());
   const pendingWriteFrameRef = useRef<Map<number, number>>(new Map());
+  const writeInFlightRef = useRef<Map<number, boolean>>(new Map());
+  const scheduleTerminalWriteRef = useRef<(sessionId: number) => void>(() => undefined);
   const pauseSyncFrameRef = useRef<Map<number, number>>(new Map());
+  const pendingResizeRef = useRef<Map<number, { cols: number; rows: number }>>(new Map());
+  const lastResizeRef = useRef<Map<number, { cols: number; rows: number }>>(new Map());
+  const resizeFrameRef = useRef<Map<number, number>>(new Map());
   const pendingInputRef = useRef<Map<number, string>>(new Map());
   const pendingInputTimerRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const reconnectHandlerRef = useRef<((tabId: number) => void) | null>(null);
@@ -109,15 +114,42 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     pendingOutputRef.current.set(sessionId, appendBoundedUtf8(old, data, MAX_PAUSED_OUTPUT_BYTES));
   }, []);
 
+  scheduleTerminalWriteRef.current = (sessionId: number) => {
+    if (writeInFlightRef.current.has(sessionId) || pendingWriteFrameRef.current.has(sessionId)) return;
+    const frame = requestAnimationFrame(() => {
+      pendingWriteFrameRef.current.delete(sessionId);
+      const pending = pendingWriteRef.current.get(sessionId);
+      if (!pending || pending.length === 0) {
+        pendingWriteRef.current.delete(sessionId);
+        return;
+      }
+      const chunk = pending.take(MAX_TERMINAL_WRITE_CHUNK);
+      if (pending.length === 0) pendingWriteRef.current.delete(sessionId);
+      const current = terminalMapRef.current.get(sessionId);
+      if (!current) return;
+      writeInFlightRef.current.set(sessionId, true);
+      current.write(chunk, () => {
+        writeInFlightRef.current.delete(sessionId);
+        scheduleTerminalWriteRef.current(sessionId);
+      });
+    });
+    pendingWriteFrameRef.current.set(sessionId, frame);
+  };
+
   const writeTerminalOutput = useCallback((sessionId: number, data: string, term?: Terminal) => {
     const target = term ?? terminalMapRef.current.get(sessionId);
     if (!target || !data) return;
     if (
       canWriteTerminalOutputImmediately(data) &&
       !pendingWriteRef.current.has(sessionId) &&
-      !pendingWriteFrameRef.current.has(sessionId)
+      !pendingWriteFrameRef.current.has(sessionId) &&
+      !writeInFlightRef.current.has(sessionId)
     ) {
-      target.write(data);
+      writeInFlightRef.current.set(sessionId, true);
+      target.write(data, () => {
+        writeInFlightRef.current.delete(sessionId);
+        scheduleTerminalWriteRef.current(sessionId);
+      });
       return;
     }
     let queue = pendingWriteRef.current.get(sessionId);
@@ -126,23 +158,24 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       pendingWriteRef.current.set(sessionId, queue);
     }
     queue.append(data);
-    if (pendingWriteFrameRef.current.has(sessionId)) return;
-    const frame = requestAnimationFrame(function flushFrame() {
-      pendingWriteFrameRef.current.delete(sessionId);
-      const pending = pendingWriteRef.current.get(sessionId);
-      if (!pending || pending.length === 0) return;
-      const chunk = pending.take(MAX_TERMINAL_WRITE_CHUNK);
-      if (pending.length > 0) {
-        const nextFrame = requestAnimationFrame(flushFrame);
-        pendingWriteFrameRef.current.set(sessionId, nextFrame);
-      } else {
-        pendingWriteRef.current.delete(sessionId);
-      }
-      const current = terminalMapRef.current.get(sessionId);
-      if (current) current.write(chunk);
-    });
-    pendingWriteFrameRef.current.set(sessionId, frame);
+    scheduleTerminalWriteRef.current(sessionId);
   }, []);
+
+  const queueResize = useCallback((sessionId: number, cols: number, rows: number) => {
+    pendingResizeRef.current.set(sessionId, { cols, rows });
+    if (resizeFrameRef.current.has(sessionId)) return;
+    const frame = requestAnimationFrame(() => {
+      resizeFrameRef.current.delete(sessionId);
+      const next = pendingResizeRef.current.get(sessionId);
+      pendingResizeRef.current.delete(sessionId);
+      if (!next) return;
+      const previous = lastResizeRef.current.get(sessionId);
+      if (previous?.cols === next.cols && previous.rows === next.rows) return;
+      lastResizeRef.current.set(sessionId, next);
+      void resizePty({ sessionId, ...next }).catch(() => null);
+    });
+    resizeFrameRef.current.set(sessionId, frame);
+  }, [resizePty]);
 
   const flushPendingOutput = useCallback((sessionId: number, term?: Terminal) => {
     const target = term ?? terminalMapRef.current.get(sessionId);
@@ -163,13 +196,17 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       fit: fitMapRef.current,
       fitFrame: fitFrameRef.current,
       writeFrame: pendingWriteFrameRef.current,
+      writeInFlight: writeInFlightRef.current,
       pauseFrame: pauseSyncFrameRef.current,
+      resizeFrame: resizeFrameRef.current,
       stabilizedTimers: stabilizedFitTimerRef.current,
       inputTimer: pendingInputTimerRef.current,
       selectionTimer: selectionCopyTimerRef.current,
       pendingOutput: pendingOutputRef.current,
       pendingWrite: pendingWriteRef.current,
       pendingInput: pendingInputRef.current,
+      pendingResize: pendingResizeRef.current,
+      lastResize: lastResizeRef.current,
       pausedByScroll: pausedByScrollRef.current,
       autoCopySelection: autoCopySelectionRef.current,
       disconnected: disconnectedByTabRef.current,
@@ -292,13 +329,11 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
           return;
         }
         const paused = pausedByScrollRef.current.get(sessionId) || false;
-        if (paused && (input === '\r' || input === '\n')) {
+        if (paused) {
           runtimeTerm.scrollToBottom();
           setPausedByScroll(sessionId, false, runtimeTerm);
           schedulePauseStateSync(sessionId, runtimeTerm);
-          return;
         }
-        if (paused) return;
         const normalizedInput = normalizeTerminalDataInput(input);
         queueInput(
           sessionId,
@@ -307,7 +342,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
         );
       });
       term.onResize(({ cols, rows }) => {
-        resizePty({ sessionId, cols, rows }).catch(() => null);
+        queueResize(sessionId, cols, rows);
       });
       term.onSelectionChange(() => {
         if (!runtimeTerm) return;
@@ -340,7 +375,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     focusTerminalInput,
     fitTerminalStabilized,
     isAtBottom,
-    resizePty,
+    queueResize,
     setPausedByScroll,
     schedulePauseStateSync,
     queueInput,
