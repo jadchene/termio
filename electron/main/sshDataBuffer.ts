@@ -1,4 +1,6 @@
-const DEFAULT_FLUSH_DELAY_MS = 4;
+// Keep interactive applications (Vim, shells) responsive while still coalescing
+// bursts into one renderer IPC message.
+const DEFAULT_FLUSH_DELAY_MS = 1;
 const DEFAULT_MAX_IPC_CHUNK = 64 * 1024;
 const DEFAULT_MAX_BUFFER = 1024 * 1024;
 const DEFAULT_HIGH_WATERMARK = 768 * 1024;
@@ -19,6 +21,18 @@ interface SshDataBufferOptions {
   highWatermark?: number;
   lowWatermark?: number;
 }
+
+const safeSliceStart = (text: string, start: number): number => {
+  const normalized = Math.max(0, start);
+  const code = text.charCodeAt(normalized);
+  return code >= 0xdc00 && code <= 0xdfff ? normalized + 1 : normalized;
+};
+
+const safeSliceEnd = (text: string, end: number): number => {
+  const normalized = Math.min(text.length, end);
+  const code = text.charCodeAt(normalized - 1);
+  return code >= 0xd800 && code <= 0xdbff ? normalized - 1 : normalized;
+};
 
 export class SshDataBuffer {
   private readonly buffers = new Map<number, string>();
@@ -46,7 +60,8 @@ export class SshDataBuffer {
     if (next.length > this.maxBuffer) {
       const notice = TRUNCATION_NOTICE.slice(0, this.maxBuffer);
       const retainedLength = Math.max(0, this.maxBuffer - notice.length);
-      next = notice + (retainedLength > 0 ? next.slice(-retainedLength) : '');
+      const retainedStart = safeSliceStart(next, next.length - retainedLength);
+      next = notice + (retainedLength > 0 ? next.slice(retainedStart) : '');
     }
     this.buffers.set(connectionId, next);
     if (next.length >= this.highWatermark && !this.paused.has(connectionId)) {
@@ -72,14 +87,20 @@ export class SshDataBuffer {
     }
     if (flushAll) {
       this.buffers.delete(connectionId);
-      for (let start = 0; start < data.length; start += this.maxIpcChunk) {
-        this.options.send(connectionId, data.slice(start, start + this.maxIpcChunk));
+      let start = 0;
+      while (start < data.length) {
+        let end = safeSliceEnd(data, start + this.maxIpcChunk);
+        if (end <= start) end = Math.min(data.length, start + 2);
+        this.options.send(connectionId, data.slice(start, end));
+        start = end;
       }
       this.resumeIfNeeded(connectionId, 0);
       return;
     }
-    const chunk = data.slice(0, this.maxIpcChunk);
-    const rest = data.slice(this.maxIpcChunk);
+    let chunkEnd = safeSliceEnd(data, this.maxIpcChunk);
+    if (chunkEnd <= 0) chunkEnd = Math.min(data.length, 2);
+    const chunk = data.slice(0, chunkEnd);
+    const rest = data.slice(chunkEnd);
     if (rest) this.buffers.set(connectionId, rest);
     else this.buffers.delete(connectionId);
     this.options.send(connectionId, chunk);

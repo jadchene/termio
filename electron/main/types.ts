@@ -35,8 +35,12 @@ export type Session = {
   host: string;
   port: number;
   username: string;
+  auth_type: 'password' | 'private_key';
   password: string;
   remember_password: number;
+  private_key_path: string;
+  passphrase: string;
+  remember_passphrase: number;
   default_session: number;
 };
 

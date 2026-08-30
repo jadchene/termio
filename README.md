@@ -12,10 +12,11 @@ Termio is a local Windows SSH client that brings terminal sessions, SFTP file ma
 
 - Multiple SSH terminal tabs, including multiple connections to the same saved session.
 - Session folders and a configurable default session.
+- Password or SSH private-key authentication, including encrypted-key passphrases.
 - SFTP browsing, upload, download, batch transfer, drag-and-drop, and common file operations.
 - Remote system status for CPU, memory, network, disk, and supported GPUs.
 - Dark and light themes with dark mode enabled by default.
-- Local session and settings storage, with remembered passwords stored through the operating system credential store.
+- Local session and settings storage. Remembered passwords and key passphrases use the operating system credential store; private-key contents are never written to the database.
 
 ## Quick Start
 
@@ -25,6 +26,8 @@ npm run dev
 ```
 
 Create a session, enter the server address and credentials, then open it from the session list. Use the left sidebar to switch between sessions, SFTP, and system status. Open Settings from the lower-left corner.
+
+For key authentication, select **SSH private key** in the session dialog and choose an OpenSSH/PEM private-key file. Leave the passphrase empty for an unencrypted key. Paths such as `~/.ssh/id_ed25519` are supported, and the terminal and SFTP use the same authentication settings.
 
 ## Settings
 

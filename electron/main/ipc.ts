@@ -2,6 +2,7 @@ import { clipboard, dialog, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { StringDecoder } from 'node:string_decoder';
 import { Client } from 'ssh2';
 import { Session } from './types';
 import { runtimeDir, userDataPath, dbPath } from './env';
@@ -9,9 +10,21 @@ import { run, all, get, withTransaction } from './db';
 import { SETTINGS_KEY, readSettings, saveSettings } from './settings';
 import { sshStateMap, sftpBatchControlMap, connectionSessionMap, lastKnownCwdMap, sharedState } from './state';
 import { runSftpUploadBatch, runSftpDownloadBatch, ensureUniqueLocalPath, getDefaultDownloadDir, resolveRemotePath, getOrCreateSftp } from './sftp';
-import { setSessionPasswordToKeytar, deleteSessionPasswordFromKeytar, getSessionPasswordFromKeytar, toPublicSession, loadSession, getSessionForConnection, requireConnected, cleanupConnectionState } from './session';
+import {
+  setSessionPasswordToKeytar,
+  deleteSessionPasswordFromKeytar,
+  getSessionPasswordFromKeytar,
+  setSessionPassphraseToKeytar,
+  deleteSessionPassphraseFromKeytar,
+  getSessionPassphraseFromKeytar,
+  toPublicSession,
+  loadSession,
+  getSessionForConnection,
+  requireConnected,
+  cleanupConnectionState,
+} from './session';
 import { getRemoteShellCwd, updateCwdFromPrompt } from './ssh';
-import { safeSend } from './window';
+import { closeMainWindow, safeSend } from './window';
 import { switchToEnglishInputMethod } from './inputMethod';
 import { registerNativeFileDragIpc } from './nativeFileDrag';
 import { registerTrustedHandle, registerTrustedOn } from './ipcSecurity';
@@ -33,7 +46,14 @@ import {
   requireStringArray,
   validateSettingsPatch,
 } from './ipcValidation';
-import { createSessionRecord, deleteSessionRecord, saveSessionPasswordRecord, updateSessionRecord } from './sessionPersistence';
+import {
+  createSessionRecord,
+  deleteSessionRecord,
+  saveSessionPassphraseRecord,
+  saveSessionPasswordRecord,
+  updateSessionRecord,
+} from './sessionPersistence';
+import { buildSshAuthentication, expandPrivateKeyPath } from './sshAuthentication';
 import {
   SSH_CONNECT_CANCELLED,
   beginConnectionAttempt,
@@ -63,6 +83,9 @@ const sessionPersistenceDependencies = {
   getPassword: getSessionPasswordFromKeytar,
   setPassword: setSessionPasswordToKeytar,
   deletePassword: deleteSessionPasswordFromKeytar,
+  getPassphrase: getSessionPassphraseFromKeytar,
+  setPassphrase: setSessionPassphraseToKeytar,
+  deletePassphrase: deleteSessionPassphraseFromKeytar,
 };
 
 export function registerIpc() {
@@ -98,7 +121,7 @@ export function registerIpc() {
     if (!sharedState.mainWindow) return false;
     return sharedState.mainWindow.isMaximized();
   });
-  ipcMain.handle('window:close', () => sharedState.mainWindow?.close());
+  ipcMain.handle('window:close', () => closeMainWindow());
   ipcMain.handle('clipboard:write-text', async (_, text: unknown) => {
     clipboard.writeText(requireString(text, '剪贴板文本', 1024 * 1024, true));
     return true;
@@ -167,6 +190,17 @@ export function registerIpc() {
     await deleteSessionRecord(sessionId, sessionPersistenceDependencies);
     return true;
   });
+  ipcMain.handle('dialog:pick-private-key', async (_, defaultPathInput: unknown) => {
+    const defaultPath = defaultPathInput == null
+      ? path.join(os.homedir(), '.ssh')
+      : expandPrivateKeyPath(requirePath(defaultPathInput, '私钥路径'));
+    const result = await dialog.showOpenDialog({
+      title: '选择 SSH 私钥',
+      defaultPath,
+      properties: ['openFile', 'dontAddToRecent'],
+    });
+    return result.canceled ? '' : (result.filePaths[0] || '');
+  });
 
   ipcMain.handle(
     'ssh:connect',
@@ -195,6 +229,14 @@ export function registerIpc() {
           : requireString(connectPayload.password, '密码', 4096, true);
         const password = suppliedPassword ?? session.password;
         const savePassword = connectPayload.savePassword === true && !!suppliedPassword;
+        const suppliedPassphrase = connectPayload.passphrase == null
+          ? undefined
+          : requireString(connectPayload.passphrase, '私钥口令', 4096, true);
+        const passphrase = suppliedPassphrase ?? session.passphrase;
+        const savePassphrase = connectPayload.savePassphrase === true && !!suppliedPassphrase;
+        const connectionSession = { ...session, password, passphrase };
+        const authentication = await buildSshAuthentication(connectionSession);
+        if (attempt.cancelled) throw new Error(SSH_CONNECT_CANCELLED);
         return await new Promise<boolean>((resolve, reject) => {
        const client = new Client();
        attempt.client = client;
@@ -276,14 +318,21 @@ export function registerIpc() {
               client.destroy();
               return;
             }
-            connectionSessionMap.set(connectionId, { ...session, password });
+            connectionSessionMap.set(connectionId, connectionSession);
             sshStateMap.set(connectionId, { client, shell: stream });
+            const decoder = new StringDecoder('utf8');
             stream.on('data', (data: Buffer) => {
-              const text = data.toString('utf8');
+              const text = decoder.write(data);
+              if (!text) return;
               updateCwdFromPrompt(connectionId, text);
               sshDataBuffer.enqueue(connectionId, text);
             });
             stream.on('close', () => {
+              const remainingText = decoder.end();
+              if (remainingText) {
+                updateCwdFromPrompt(connectionId, remainingText);
+                sshDataBuffer.enqueue(connectionId, remainingText);
+              }
               sshDataBuffer.flush(connectionId, true);
               void cleanupConnectionState(connectionId, client).then((cleaned) => {
                 if (cleaned) safeSend('ssh:closed', { sessionId: connectionId });
@@ -300,6 +349,17 @@ export function registerIpc() {
                 .catch((dbErr) => fail(dbErr));
               return;
             }
+            if (savePassphrase) {
+              const latestPassphrase = String(connectPayload.passphrase || '');
+              void saveSessionPassphraseRecord(
+                profileSessionId,
+                latestPassphrase,
+                sessionPersistenceDependencies,
+              )
+                .then(() => ok())
+                .catch((dbErr) => fail(dbErr));
+              return;
+            }
             ok();
           });
         })
@@ -308,8 +368,7 @@ export function registerIpc() {
           host: session.host,
           port: session.port,
           username: session.username,
-          password,
-          tryKeyboard: true,
+          ...authentication,
           keepaliveInterval: 10000,
           readyTimeout: 20000,
           hostVerifier: createHostVerifier(

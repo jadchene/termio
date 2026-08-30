@@ -84,7 +84,7 @@ export function useSettingsActions(params: UseSettingsActionsParams) {
   };
 
   const saveSettingsModal = async () => {
-    if (!settingsDraft) return;
+    if (!settingsDraft) return false;
     const normalizedDraft: Settings = {
       ...settingsDraft,
       theme: {
@@ -105,8 +105,10 @@ export function useSettingsActions(params: UseSettingsActionsParams) {
       setShowSettings(false);
       setSettingsTab('appearance');
       setCursorStyleMenuOpen(false);
+      return true;
     } catch (error) {
       await showSettingsError(error);
+      return false;
     }
   };
 

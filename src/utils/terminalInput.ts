@@ -15,3 +15,9 @@ export function normalizeTerminalDataInput(input: string): string {
   if (input.length <= 1 || !hasMultilineInput(input)) return input;
   return normalizeTerminalPaste(input);
 }
+
+export function shouldFlushTerminalInputImmediately(input: string): boolean {
+  // Control sequences drive Vim modes, cursor keys and shell submission. They must
+  // preserve minimal latency; printable bursts can be coalesced for one millisecond.
+  return /[\x00-\x1f\x7f]/.test(input);
+}

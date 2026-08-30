@@ -1,12 +1,13 @@
 import { memo, useRef, type MutableRefObject } from 'react';
 import type { Terminal } from '@xterm/xterm';
-import type { Settings } from '../types';
+import type { ConnectionState, Settings } from '../types';
 import { hasMultilineInput, prepareTerminalPaste } from '../utils/terminalInput';
 import { getTerminalSelectionText } from '../utils/terminalSelection';
 
 type TerminalZoneProps = {
   activeSessionId: number | null;
   pausedOutput: boolean;
+  connectionState: ConnectionState | null;
   settings: Settings;
   terminalContainerRef: MutableRefObject<HTMLDivElement | null>;
   terminalMapRef: MutableRefObject<Map<number, Terminal>>;
@@ -19,6 +20,7 @@ function TerminalZoneInner(props: TerminalZoneProps) {
   const {
     activeSessionId,
     pausedOutput,
+    connectionState,
     settings,
     terminalContainerRef,
     terminalMapRef,
@@ -60,9 +62,26 @@ function TerminalZoneInner(props: TerminalZoneProps) {
     }
   };
 
+  const resumeOutput = () => {
+    if (!activeSessionId) return;
+    const term = terminalMapRef.current.get(activeSessionId);
+    term?.scrollToBottom();
+    syncPauseStateWithViewport(activeSessionId, term);
+    requestAnimationFrame(() => term?.focus());
+  };
+
   return (
     <section className="terminal-zone">
-      {activeSessionId && pausedOutput && <div className="pause-banner">已暂停输出，滚动到底部或按回车继续</div>}
+      {!activeSessionId && (
+        <div className="terminal-empty-state">
+          <strong>选择一个 SSH 会话开始连接</strong>
+          <span>可在左侧单击会话；右键可新建独立连接</span>
+        </div>
+      )}
+      {activeSessionId && connectionState === 'connecting' && (
+        <div className="terminal-connecting" role="status">正在建立 SSH 连接…</div>
+      )}
+      {activeSessionId && pausedOutput && <button className="pause-banner" onClick={resumeOutput}>正在查看历史输出 · 点击或输入任意内容继续</button>}
       <div
         ref={terminalContainerRef}
         className="terminal-container"

@@ -41,8 +41,12 @@ const defaultSessionForm: SessionForm = {
   host: '',
   port: 22,
   username: 'root',
+  auth_type: 'password',
   password: '',
   remember_password: 1,
+  private_key_path: '',
+  passphrase: '',
+  remember_passphrase: 0,
   default_session: 0,
 };
 
@@ -52,7 +56,10 @@ function isAuthError(message: string): boolean {
     text.includes('all configured authentication methods failed') ||
     text.includes('authentication failure') ||
     text.includes('permission denied') ||
-    text.includes('auth fail')
+    text.includes('auth fail') ||
+    text.includes('bad passphrase') ||
+    text.includes('no passphrase given') ||
+    text.includes('private key is encrypted')
   );
 }
 
@@ -251,6 +258,7 @@ export default function App() {
     () => sessions.find((it) => it.id === activeTab?.sessionId) || null,
     [sessions, activeTab],
   );
+  const activeSessionConnected = activeSessionId != null && connectionStates[activeSessionId] === 'connected';
   const {
     sftpPath,
     setSftpPath,
@@ -258,6 +266,7 @@ export default function App() {
     setSftpPathInput,
     sftpItems,
     selectedSftpPaths,
+    sftpLoading,
     sftpUploadDropOver,
     setSftpUploadDropOver,
     refreshSftp,
@@ -310,6 +319,7 @@ export default function App() {
 
   const { loadSessionData, bootstrapError, retryBootstrap } = useAppBootstrap({
     activeSessionIdRef,
+    tabsRef,
     setSettings,
     setRuntimeInfo,
     setFolders,
@@ -333,8 +343,6 @@ export default function App() {
   });
 
   const { reconnectTab, connectSession, closeTab } = useSessionTabs({
-    tabs,
-    activeSessionId,
     setTabs,
     setActiveSessionId,
     setSessions,
@@ -395,6 +403,7 @@ export default function App() {
     tabCount: tabs.length,
     sidebarTab,
     activeSessionId,
+    connectionState: activeSessionId == null ? null : connectionStates[activeSessionId] ?? 'connecting',
     terminalContainerRef,
     connectSession,
     attachTerminal,
@@ -430,6 +439,7 @@ export default function App() {
   const sftpInteractions = useSftpInteractions({
     activeSessionId,
     activeSession,
+    isConnected: activeSessionConnected,
     settings,
     setSettings,
     sftpPath,
@@ -452,6 +462,7 @@ export default function App() {
 
   const sessionTreeActions = useSessionTreeActions({
     sessions,
+    tabs,
     editingSession,
     sessionForm,
     folderName,
@@ -471,6 +482,8 @@ export default function App() {
     askConfirm,
     askPrompt,
     showAlert,
+    connectSession,
+    closeTab,
   });
 
   const settingsActions = useSettingsActions({
@@ -487,6 +500,8 @@ export default function App() {
 
   const windowActions = useWindowActions({
     closeTab,
+    hasRunningTransfers: transferRows.some((row) => row.status === 'running' || row.status === 'cancelling'),
+    askConfirm,
   });
 
   if (!settings) {
@@ -533,7 +548,7 @@ export default function App() {
           '--bg': terminalTheme.background,
           '--fg': terminalTheme.foreground,
           '--sidebar-width': `${resolvedSidebarWidth}px`,
-          '--ui-font-family': 'MiSans, sans-serif',
+          '--ui-font-family': settings.theme.uiFontFamily || 'MiSans, sans-serif',
           '--ui-font-size': `${settings.theme.uiFontSize || 13}px`,
         } as CSSProperties
       }
@@ -551,11 +566,13 @@ export default function App() {
           sessionTreeActions={sessionTreeActions}
           activeSessionId={activeSessionId}
           activeSession={activeSession}
+          activeSessionConnected={activeSessionConnected}
           settingsShowHiddenFiles={settings.ui.showHiddenFiles}
           sftpPath={sftpPath}
           sftpPathInput={sftpPathInput}
           sftpItems={sftpItems}
           selectedSftpPaths={selectedSftpPaths}
+          sftpLoading={sftpLoading}
           dropOver={sftpUploadDropOver}
           transferRows={currentTransferRows}
           formatSftpMeta={formatSftpMeta}
@@ -587,6 +604,7 @@ export default function App() {
         <TerminalZone
           activeSessionId={activeSessionId}
           pausedOutput={pausedOutput}
+          connectionState={activeSessionId == null ? null : connectionStates[activeSessionId] ?? 'connecting'}
           settings={settings}
           showAlert={showAlert}
           terminalContainerRef={terminalContainerRef}

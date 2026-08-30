@@ -13,7 +13,7 @@ import {
   sshStateMap,
 } from './state';
 import { subscribeMetrics } from './metrics';
-import { createWindow, flushWindowState } from './window';
+import { approveMainWindowClose, createWindow, flushWindowState } from './window';
 import { registerIpc } from './ipc';
 import { cancelAllNativeFileDrags } from './nativeFileDrag';
 import { cancelPendingHostKeyRequests } from './hostKey';
@@ -95,6 +95,7 @@ app.on('before-quit', (event) => {
     new Promise<void>((resolve) => setTimeout(resolve, 3000)),
   ]).finally(() => {
     gracefulQuitFinished = true;
+    approveMainWindowClose();
     app.quit();
   });
 });

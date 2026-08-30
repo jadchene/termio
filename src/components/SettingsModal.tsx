@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+import { useEffect, useMemo, useState, type RefObject } from 'react';
 import {
   Button,
   Form,
@@ -12,6 +12,7 @@ import {
   Typography,
 } from 'antd';
 import type { Settings } from '../types';
+import { normalizeFontFamilies } from '../utils/systemFonts';
 
 type SettingsTab = 'appearance' | 'behavior' | 'system';
 
@@ -34,7 +35,7 @@ type SettingsModalProps = {
   onUpdateDraft: (next: Settings) => void;
   onPickDefaultDownloadDir: () => Promise<void>;
   onCancel: () => void;
-  onSave: () => Promise<void>;
+  onSave: () => Promise<boolean>;
 };
 
 const SettingGroup = ({ title, children }: { title: string; children: React.ReactNode }) => (
@@ -68,6 +69,48 @@ export const SettingsModal = (props: SettingsModalProps) => {
     onSave,
   } = props;
 
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [fontsLoading, setFontsLoading] = useState(false);
+  const [fontsAttempted, setFontsAttempted] = useState(false);
+  const [fontsUnavailable, setFontsUnavailable] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const loadSystemFonts = async () => {
+    if (!draft || fontsLoading) return;
+    if (!window.queryLocalFonts) {
+      setFontsUnavailable(true);
+      return;
+    }
+    setFontsLoading(true);
+    setFontsUnavailable(false);
+    try {
+      const fonts = await window.queryLocalFonts();
+      setSystemFonts(normalizeFontFamilies(fonts.map((font) => font.family), [
+        draft.theme.uiFontFamily,
+        draft.theme.terminalFontFamily,
+      ]));
+    } catch {
+      setFontsUnavailable(true);
+    } finally {
+      setFontsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!show || !draft || fontsAttempted) return;
+    setFontsAttempted(true);
+    void loadSystemFonts();
+  }, [show, draft, fontsAttempted]);
+
+  useEffect(() => {
+    if (show) setSaving(false);
+  }, [show]);
+
+  const fontOptions = useMemo(() => normalizeFontFamilies(systemFonts, draft ? [
+    draft.theme.uiFontFamily,
+    draft.theme.terminalFontFamily,
+  ] : []).map((family) => ({ label: family, value: family })), [draft?.theme.uiFontFamily, draft?.theme.terminalFontFamily, systemFonts]);
+
   if (!draft) return null;
   const updateTheme = (next: Partial<Settings['theme']>) => onUpdateDraft({
     ...draft,
@@ -77,6 +120,16 @@ export const SettingsModal = (props: SettingsModalProps) => {
     ...draft,
     behavior: { ...draft.behavior, ...next },
   });
+  const fontNotFound = fontsUnavailable ? '无法读取系统字体，请检查本地字体访问权限' : '未找到字体';
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onSave();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const appearance = (
     <div className="settings-scroll">
@@ -94,12 +147,33 @@ export const SettingsModal = (props: SettingsModalProps) => {
           <Form.Item label="界面字号">
             <InputNumber min={11} max={24} value={draft.theme.uiFontSize} suffix="px" onChange={(value) => updateTheme({ uiFontSize: value ?? 13 })} />
           </Form.Item>
+          <Form.Item label="界面字体" extra={fontsUnavailable ? fontNotFound : undefined}>
+            <Select
+              showSearch
+              loading={fontsLoading}
+              value={draft.theme.uiFontFamily}
+              options={fontOptions}
+              notFoundContent={fontNotFound}
+              optionFilterProp="label"
+              onOpenChange={(open) => { if (open && fontsUnavailable) void loadSystemFonts(); }}
+              onChange={(value) => updateTheme({ uiFontFamily: value })}
+            />
+          </Form.Item>
         </Form>
       </SettingGroup>
       <SettingGroup title="终端">
         <Form {...settingsFormLayout}>
           <Form.Item label="终端字体">
-            <Input value={draft.theme.terminalFontFamily} onChange={(event) => updateTheme({ terminalFontFamily: event.target.value })} />
+            <Select
+              showSearch
+              loading={fontsLoading}
+              value={draft.theme.terminalFontFamily}
+              options={fontOptions}
+              notFoundContent={fontNotFound}
+              optionFilterProp="label"
+              onOpenChange={(open) => { if (open && fontsUnavailable) void loadSystemFonts(); }}
+              onChange={(value) => updateTheme({ terminalFontFamily: value })}
+            />
           </Form.Item>
           <Form.Item label="终端字号">
             <InputNumber min={10} max={36} value={draft.theme.terminalFontSize} suffix="px" onChange={(value) => updateTheme({ terminalFontSize: value ?? 16 })} />
@@ -179,10 +253,12 @@ export const SettingsModal = (props: SettingsModalProps) => {
       width={760}
       centered
       mask={{ closable: false }}
-      onCancel={onCancel}
+      closable={!saving}
+      keyboard={!saving}
+      onCancel={() => { if (!saving) onCancel(); }}
       footer={[
-        <Button key="cancel" onClick={onCancel}>取消</Button>,
-        <Button key="save" type="primary" onClick={() => void onSave()}>保存</Button>,
+        <Button key="cancel" disabled={saving} onClick={onCancel}>取消</Button>,
+        <Button key="save" type="primary" loading={saving} onClick={() => void save()}>保存</Button>,
       ]}
     >
       <Tabs

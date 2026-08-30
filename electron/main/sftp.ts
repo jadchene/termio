@@ -8,6 +8,7 @@ import { sshStateMap, sftpMap, sftpBatchControlMap, sftpProgressThrottleMap, DEF
 import { getSessionForConnection, requireConnected } from './session';
 import { safeSend } from './window';
 import { createHostVerifier } from './hostKey';
+import { buildSshAuthentication } from './sshAuthentication';
 import { createSftpTransferChannel } from './sftpChannel';
 import {
   allocateUniqueLocalPath,
@@ -394,11 +395,12 @@ export async function getOrCreateSftp(connectionId: number, session: Session): P
     }
   }
   const client = new SftpClient();
+  const authentication = await buildSshAuthentication(session);
   await client.connect({
     host: session.host,
     port: session.port,
     username: session.username,
-    password: session.password,
+    ...authentication,
     readyTimeout: 20000,
     hostVerifier: createHostVerifier(session),
   });
@@ -417,11 +419,12 @@ export async function getOrCreateSftp(connectionId: number, session: Session): P
 
 export async function createStandaloneSftp(session: Session): Promise<any> {
   const client = new SftpClient();
+  const authentication = await buildSshAuthentication(session);
   await client.connect({
     host: session.host,
     port: session.port,
     username: session.username,
-    password: session.password,
+    ...authentication,
     readyTimeout: 20000,
     hostVerifier: createHostVerifier(session),
   });

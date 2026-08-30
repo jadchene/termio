@@ -1,6 +1,6 @@
 import { DownOutlined, FolderAddOutlined, FolderOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
 import { Button, Empty, Tooltip } from 'antd';
-import type { MouseEvent } from 'react';
+import { useMemo, type MouseEvent } from 'react';
 import type { ReactNode } from 'react';
 import type { Folder, Session } from '../types';
 
@@ -54,13 +54,35 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
     onCreateSession,
   } = props;
 
+  const sessionsByFolder = useMemo(() => {
+    const grouped = new Map<number | null, Session[]>();
+    for (const session of [...sessions].sort(compareByNameThenId)) {
+      const list = grouped.get(session.folder_id) || [];
+      list.push(session);
+      grouped.set(session.folder_id, list);
+    }
+    return grouped;
+  }, [sessions]);
+  const foldersByParent = useMemo(() => {
+    const grouped = new Map<number | null, Folder[]>();
+    for (const folder of [...folders].sort(compareByNameThenId)) {
+      const list = grouped.get(folder.parent_id) || [];
+      list.push(folder);
+      grouped.set(folder.parent_id, list);
+    }
+    return grouped;
+  }, [folders]);
+
   const renderSessionList = (folderId: number | null): ReactNode[] =>
-    sessions
-      .filter((session) => session.folder_id === folderId)
-      .sort(compareByNameThenId)
+    (sessionsByFolder.get(folderId) || [])
       .map((session) => (
         <div key={session.id} className="session-node" onContextMenu={(e) => onOpenSessionMenu(e, session)}>
-          <button className="link-btn tree-row-btn" onContextMenu={(e) => onOpenSessionMenu(e, session)} onClick={() => null} onDoubleClick={() => onOpenSession(session)}>
+          <button
+            className="link-btn tree-row-btn"
+            title={`${session.name} — ${session.username}@${session.host}:${session.port}`}
+            onContextMenu={(e) => onOpenSessionMenu(e, session)}
+            onClick={() => onOpenSession(session)}
+          >
             <TerminalIcon />
             <span className="session-tree-name">{session.name}</span>
           </button>
@@ -68,18 +90,16 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
       ));
 
   const renderFolderTree = (parentId: number | null): ReactNode[] =>
-    folders
-      .filter((folder) => folder.parent_id === parentId)
-      .sort(compareByNameThenId)
+    (foldersByParent.get(parentId) || [])
       .map((folder) => (
         <div key={folder.id} className="folder-node">
-          <div className="folder-title" onClick={() => onToggleFolder(folder.id)} onContextMenu={(e) => onOpenFolderMenu(e, folder)}>
+          <button className="folder-title" aria-expanded={expandedFolderIds.has(folder.id)} onClick={() => onToggleFolder(folder.id)} onContextMenu={(e) => onOpenFolderMenu(e, folder)}>
             <span className="folder-toggle-icon" aria-hidden="true">
               {expandedFolderIds.has(folder.id) ? <DownOutlined /> : <RightOutlined />}
             </span>
             <FolderOutlined className="folder-type-icon" />
             <span className="folder-tree-name">{folder.name}</span>
-          </div>
+          </button>
           {expandedFolderIds.has(folder.id) && (
             <div className="folder-children">
               {renderSessionList(folder.id)}
@@ -92,8 +112,8 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
   return (
     <div className="tree-content panel-content">
       <div className="sidebar-actions">
-        <Tooltip title="新建目录"><Button type="text" size="small" icon={<FolderAddOutlined />} onClick={onCreateFolder} /></Tooltip>
-        <Tooltip title="新建会话"><Button type="text" size="small" icon={<PlusOutlined />} onClick={onCreateSession} /></Tooltip>
+        <Tooltip title="新建目录"><Button aria-label="新建目录" type="text" size="small" icon={<FolderAddOutlined />} onClick={onCreateFolder} /></Tooltip>
+        <Tooltip title="新建会话"><Button aria-label="新建会话" type="text" size="small" icon={<PlusOutlined />} onClick={onCreateSession} /></Tooltip>
       </div>
       <div className="tree-scroll">
         {sessions.length === 0 && folders.length === 0

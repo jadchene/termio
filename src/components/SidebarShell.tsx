@@ -32,11 +32,13 @@ type SidebarShellProps = {
   };
   activeSessionId: number | null;
   activeSession: Session | null;
+  activeSessionConnected: boolean;
   settingsShowHiddenFiles: boolean;
   sftpPath: string;
   sftpPathInput: string;
   sftpItems: SftpItem[];
   selectedSftpPaths: string[];
+  sftpLoading: boolean;
   dropOver: boolean;
   transferRows: TransferRow[];
   formatSftpMeta: (item: SftpItem) => string;
@@ -57,6 +59,7 @@ type SidebarShellProps = {
     onPathBlur: () => void;
     onStartItemDrag: (e: DragEvent<HTMLDivElement>, fullPath: string, item: SftpItem) => void;
     onEndItemDrag: () => void;
+    onSelectItem: (fullPath: string, options: { additive: boolean; range: boolean }) => void;
     onOpenItemMenu: (e: MouseEvent, payload: { path: string; name: string; isDir: boolean }) => void;
     onToggleItemSelect: (fullPath: string, checked: boolean, range?: boolean) => void;
     onOpenDir: (nextPath: string) => Promise<void>;
@@ -80,11 +83,13 @@ export function SidebarShell(props: SidebarShellProps) {
     sessionTreeActions,
     activeSessionId,
     activeSession,
+    activeSessionConnected,
     settingsShowHiddenFiles,
     sftpPath,
     sftpPathInput,
     sftpItems,
     selectedSftpPaths,
+    sftpLoading,
     dropOver,
     transferRows,
     formatSftpMeta,
@@ -106,13 +111,13 @@ export function SidebarShell(props: SidebarShellProps) {
           <div className="rail-logo" title="Termio">
             <img src={appIcon} alt="Termio" draggable={false} />
           </div>
-          <Button className={sidebarTab === 'sessions' ? 'is-active' : ''} type="text" icon={<CloudServerOutlined />} onClick={() => selectSidebarTab('sessions')} />
-          <Button className={sidebarTab === 'sftp' ? 'is-active' : ''} type="text" icon={<FolderOpenOutlined />} onClick={() => selectSidebarTab('sftp')} />
-          <Button className={sidebarTab === 'status' ? 'is-active' : ''} type="text" icon={<SlidersOutlined />} onClick={() => selectSidebarTab('status')} />
+          <Button aria-label="会话" className={sidebarTab === 'sessions' ? 'is-active' : ''} type="text" icon={<CloudServerOutlined />} onClick={() => selectSidebarTab('sessions')} />
+          <Button aria-label="SFTP 文件" className={sidebarTab === 'sftp' ? 'is-active' : ''} type="text" icon={<FolderOpenOutlined />} onClick={() => selectSidebarTab('sftp')} />
+          <Button aria-label="系统状态" className={sidebarTab === 'status' ? 'is-active' : ''} type="text" icon={<SlidersOutlined />} onClick={() => selectSidebarTab('status')} />
         </div>
         <div className="activity-rail-footer">
-          <Button type="text" icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={onToggleSidebar} />
-          <Button type="text" icon={<SettingOutlined />} onClick={onOpenSettings} />
+          <Button aria-label={sidebarVisible ? '收起侧栏' : '展开侧栏'} type="text" icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={onToggleSidebar} />
+          <Button aria-label="设置" type="text" icon={<SettingOutlined />} onClick={onOpenSettings} />
         </div>
       </nav>
       {sidebarVisible && <div className="sidebar-panel">
@@ -135,7 +140,7 @@ export function SidebarShell(props: SidebarShellProps) {
           onOpenSessionMenu={sessionTreeActions.onOpenSessionMenu}
           onOpenFolderMenu={sessionTreeActions.onOpenFolderMenu}
           onOpenSession={(session) => {
-            void connectSession(session, true);
+            void connectSession(session);
           }}
           onCreateFolder={sessionTreeActions.onCreateFolder}
           onCreateSession={sessionTreeActions.onCreateSession}
@@ -144,12 +149,13 @@ export function SidebarShell(props: SidebarShellProps) {
       {sidebarTab === 'sftp' && (
         <SftpPanel
           activeSessionId={activeSessionId}
-          hasActiveSession={!!activeSession}
+          hasActiveSession={!!activeSession && activeSessionConnected}
           showHiddenFiles={settingsShowHiddenFiles}
           sftpPath={sftpPath}
           sftpPathInput={sftpPathInput}
           sftpItems={sftpItems}
           selectedSftpPaths={selectedSftpPaths}
+          loading={sftpLoading}
           dropOver={dropOver}
           transferRows={transferRows}
           formatSftpMeta={formatSftpMeta}
@@ -169,6 +175,7 @@ export function SidebarShell(props: SidebarShellProps) {
           onPathBlur={sftpInteractions.onPathBlur}
           onStartItemDrag={sftpInteractions.onStartItemDrag}
           onEndItemDrag={sftpInteractions.onEndItemDrag}
+          onSelectItem={sftpInteractions.onSelectItem}
           onOpenItemMenu={sftpInteractions.onOpenItemMenu}
           onToggleItemSelect={sftpInteractions.onToggleItemSelect}
           onOpenDir={sftpInteractions.onOpenDir}

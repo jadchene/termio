@@ -141,11 +141,24 @@ export async function initStorage() {
       host TEXT NOT NULL,
       port INTEGER NOT NULL,
       username TEXT NOT NULL,
+      auth_type TEXT NOT NULL DEFAULT 'password',
       password TEXT,
       remember_password INTEGER DEFAULT 1,
+      private_key_path TEXT NOT NULL DEFAULT '',
+      remember_passphrase INTEGER DEFAULT 0,
       default_session INTEGER DEFAULT 0
     )`,
   );
+  const sessionColumns = new Set((await all<{ name: string }>('PRAGMA table_info(session)')).map((column) => column.name));
+  if (!sessionColumns.has('auth_type')) {
+    await run("ALTER TABLE session ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'password'");
+  }
+  if (!sessionColumns.has('private_key_path')) {
+    await run("ALTER TABLE session ADD COLUMN private_key_path TEXT NOT NULL DEFAULT ''");
+  }
+  if (!sessionColumns.has('remember_passphrase')) {
+    await run('ALTER TABLE session ADD COLUMN remember_passphrase INTEGER DEFAULT 0');
+  }
   await run(
     `CREATE TABLE IF NOT EXISTS app_setting (
       key TEXT PRIMARY KEY,

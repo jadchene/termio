@@ -15,7 +15,7 @@ export type TransferRow = {
   percent: number;
   transferred: number;
   total: number;
-  status: 'running' | 'done' | 'error' | 'cancelled';
+  status: 'running' | 'cancelling' | 'done' | 'error' | 'cancelled';
 };
 
 type UseTransferQueueParams = {
@@ -30,7 +30,7 @@ export function useTransferQueue(params: UseTransferQueueParams) {
   const transferErrorsRef = useRef<Map<string, SftpTransferError[]>>(new Map());
 
   const normalizeRunningStatus = (status: TransferRow['status']): TransferRow['status'] =>
-    status === 'cancelled' || status === 'error' ? status : 'running';
+    status === 'cancelled' || status === 'cancelling' || status === 'error' ? status : 'running';
 
   const updateTransferRow = (event: SftpTransferProgress) => {
     const batchKey = sftpTransferBatchKey(event.sessionId, event.batchId);
@@ -142,21 +142,24 @@ export function useTransferQueue(params: UseTransferQueueParams) {
   };
 
   const cancelTransferRow = async (row: TransferRow) => {
+    if (row.status === 'cancelling') return;
     if (row.status !== 'running') {
       setTransferRows((prev) => prev.filter((it) => !(it.sessionId === row.sessionId && it.batchId === row.batchId)));
       return;
     }
     const batchKey = sftpTransferBatchKey(row.sessionId, row.batchId);
-    cancelledTransferBatchRef.current.add(batchKey);
     transferErrorsRef.current.delete(batchKey);
-    if (cancelledTransferBatchRef.current.size > 200) {
-      cancelledTransferBatchRef.current.clear();
-      cancelledTransferBatchRef.current.add(batchKey);
-    }
-    setTransferRows((prev) => prev.filter((it) => !(it.sessionId === row.sessionId && it.batchId === row.batchId)));
+    setTransferRows((prev) => prev.map((it) => it.key === row.key ? { ...it, status: 'cancelling' } : it));
     const ok = await cancelBatch({ sessionId: row.sessionId, batchId: row.batchId }).catch(() => false);
-    if (!ok) {
-      cancelledTransferBatchRef.current.delete(batchKey);
+    if (ok) {
+      cancelledTransferBatchRef.current.add(batchKey);
+      if (cancelledTransferBatchRef.current.size > 200) {
+        cancelledTransferBatchRef.current.clear();
+        cancelledTransferBatchRef.current.add(batchKey);
+      }
+      setTransferRows((prev) => prev.filter((it) => it.key !== row.key));
+    } else {
+      setTransferRows((prev) => prev.map((it) => it.key === row.key ? { ...it, status: 'running' } : it));
       await showAlert('取消传输失败，请重试', 'SFTP');
     }
   };

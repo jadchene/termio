@@ -8,6 +8,10 @@ export function toKeytarAccount(sessionId: number): string {
   return `session:${sessionId}`;
 }
 
+export function toPassphraseKeytarAccount(sessionId: number): string {
+  return `session:${sessionId}:private-key-passphrase`;
+}
+
 export async function getSessionPasswordFromKeytar(sessionId: number): Promise<string | null> {
   return keytar.getPassword(KEYTAR_SERVICE, toKeytarAccount(sessionId));
 }
@@ -20,22 +24,43 @@ export async function deleteSessionPasswordFromKeytar(sessionId: number): Promis
   await keytar.deletePassword(KEYTAR_SERVICE, toKeytarAccount(sessionId));
 }
 
+export async function getSessionPassphraseFromKeytar(sessionId: number): Promise<string | null> {
+  return keytar.getPassword(KEYTAR_SERVICE, toPassphraseKeytarAccount(sessionId));
+}
+
+export async function setSessionPassphraseToKeytar(sessionId: number, passphrase: string): Promise<void> {
+  await keytar.setPassword(KEYTAR_SERVICE, toPassphraseKeytarAccount(sessionId), passphrase);
+}
+
+export async function deleteSessionPassphraseFromKeytar(sessionId: number): Promise<void> {
+  await keytar.deletePassword(KEYTAR_SERVICE, toPassphraseKeytarAccount(sessionId));
+}
+
 export function toPublicSession(session: Session): Session {
   return {
     ...session,
     password: '',
+    passphrase: '',
   };
 }
 
-export async function hydrateSessionPassword(session: Session): Promise<Session> {
-  if (session.remember_password !== 1) {
-    return { ...session, password: '' };
+export async function hydrateSessionCredentials(session: Session): Promise<Session> {
+  const normalized: Session = {
+    ...session,
+    auth_type: session.auth_type === 'private_key' ? 'private_key' : 'password',
+    private_key_path: String(session.private_key_path || ''),
+    password: '',
+    passphrase: '',
+    remember_passphrase: Number(session.remember_passphrase || 0),
+  };
+  if (normalized.auth_type === 'password' && normalized.remember_password === 1) {
+    const fromKeytar = await getSessionPasswordFromKeytar(session.id);
+    normalized.password = fromKeytar ?? String(session.password || '');
   }
-  const fromKeytar = await getSessionPasswordFromKeytar(session.id);
-  if (fromKeytar != null) {
-    return { ...session, password: fromKeytar };
+  if (normalized.auth_type === 'private_key' && normalized.remember_passphrase === 1) {
+    normalized.passphrase = (await getSessionPassphraseFromKeytar(session.id)) ?? '';
   }
-  return { ...session, password: String(session.password || '') };
+  return normalized;
 }
 
 export async function loadSession(sessionId: number): Promise<Session> {
@@ -43,7 +68,7 @@ export async function loadSession(sessionId: number): Promise<Session> {
   if (!session) {
     throw new Error('会话不存在');
   }
-  return hydrateSessionPassword(session);
+  return hydrateSessionCredentials(session);
 }
 
 export async function getSessionForConnection(connectionId: number): Promise<Session> {

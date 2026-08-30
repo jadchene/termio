@@ -47,6 +47,10 @@ export function requireStringArray(value: unknown, label: string, maxItems: numb
 
 export function parseSession(value: unknown, requireId: boolean): Session {
   const input = requireRecord(value, '会话');
+  const authType = requireString(input.auth_type ?? 'password', '认证方式', 32) as Session['auth_type'];
+  if (authType !== 'password' && authType !== 'private_key') throw new Error('认证方式无效');
+  const privateKeyPath = requireString(input.private_key_path ?? '', '私钥路径', MAX_PATH_LENGTH, true).trim();
+  if (authType === 'private_key' && !privateKeyPath) throw new Error('请选择私钥文件');
   return {
     id: requireId ? requirePositiveId(input.id, '会话 ID') : 0,
     folder_id: requireNullablePositiveId(input.folder_id, '目录 ID'),
@@ -54,8 +58,16 @@ export function parseSession(value: unknown, requireId: boolean): Session {
     host: requireString(input.host, '主机地址', 255).trim(),
     port: requireIntegerInRange(input.port, '端口', 1, 65535),
     username: requireString(input.username, '用户名', 128).trim(),
+    auth_type: authType,
     password: requireString(input.password ?? '', '密码', 4096, true),
-    remember_password: requireIntegerInRange(input.remember_password, '记住密码', 0, 1),
+    remember_password: authType === 'password'
+      ? requireIntegerInRange(input.remember_password, '记住密码', 0, 1)
+      : 0,
+    private_key_path: privateKeyPath,
+    passphrase: requireString(input.passphrase ?? '', '私钥口令', 4096, true),
+    remember_passphrase: authType === 'private_key'
+      ? requireIntegerInRange(input.remember_passphrase ?? 0, '记住私钥口令', 0, 1)
+      : 0,
     default_session: requireIntegerInRange(input.default_session, '默认会话', 0, 1),
   };
 }

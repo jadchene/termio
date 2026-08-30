@@ -17,6 +17,7 @@ function buildCopiedSessionName(baseName: string, existingNames: Set<string>): s
 
 type UseSessionTreeActionsParams = {
   sessions: Session[];
+  tabs: Array<{ id: number; sessionId: number }>;
   editingSession: Session | null;
   sessionForm: SessionForm;
   folderName: string;
@@ -36,11 +37,14 @@ type UseSessionTreeActionsParams = {
   askConfirm: (message: string, title?: string) => Promise<boolean>;
   askPrompt: (message: string, initialValue?: string, title?: string) => Promise<string | null>;
   showAlert: (message: string, title?: string) => Promise<void>;
+  connectSession: (session: Session, forceNew?: boolean) => Promise<void>;
+  closeTab: (tabId: number) => Promise<void>;
 };
 
 export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   const {
     sessions,
+    tabs,
     editingSession,
     sessionForm,
     folderName,
@@ -60,6 +64,8 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     askConfirm,
     askPrompt,
     showAlert,
+    connectSession,
+    closeTab,
   } = params;
 
   const runMutation = async (action: () => Promise<void>, title: string): Promise<boolean> => {
@@ -81,8 +87,12 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
         host: target.host,
         port: target.port,
         username: target.username,
+        auth_type: target.auth_type,
         password: '',
         remember_password: target.remember_password,
+        private_key_path: target.private_key_path,
+        passphrase: '',
+        remember_passphrase: target.remember_passphrase,
         default_session: target.default_session,
       });
     } else {
@@ -119,34 +129,44 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onConfirmSessionModal = async () => {
-    if (!sessionForm.name || !sessionForm.host || !sessionForm.username) {
-      await showAlert('请填写完整信息');
-      return;
+    if (!sessionForm.name.trim() || !sessionForm.host.trim() || !sessionForm.username.trim() ||
+      (sessionForm.auth_type === 'private_key' && !sessionForm.private_key_path.trim())) {
+      return false;
     }
     const saved = await runMutation(async () => {
       if (editingSession) await window.terminalApi.updateSession({ id: editingSession.id, ...sessionForm });
       else await window.terminalApi.createSession(sessionForm);
       await loadSessionData();
     }, '保存会话失败');
-    if (!saved) return;
+    if (!saved) return false;
     setSessionFolderMenuOpen(false);
     setShowSessionModal(false);
+    return true;
+  };
+
+  const onPickPrivateKey = async (defaultPath: string): Promise<string> => {
+    try {
+      return await window.terminalApi.pickPrivateKey(defaultPath || undefined);
+    } catch (error) {
+      await showAlert(error instanceof Error ? error.message : String(error), '选择私钥失败');
+      return '';
+    }
   };
 
   const onConfirmFolderModal = async () => {
     if (!folderName.trim()) {
-      await showAlert('请输入目录名');
-      return;
+      return false;
     }
     const saved = await runMutation(async () => {
       await window.terminalApi.createFolder({ name: folderName.trim(), parentId: folderParent });
       await loadSessionData();
     }, '创建目录失败');
-    if (!saved) return;
+    if (!saved) return false;
     setFolderName('');
     setFolderParent(null);
     setFolderParentMenuOpen(false);
     setShowFolderModal(false);
+    return true;
   };
 
   const onCopySessionMenu = async (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
@@ -164,13 +184,23 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
         host: target.host,
         port: target.port,
         username: target.username,
+        auth_type: target.auth_type,
         password: '',
         remember_password: 0,
+        private_key_path: target.private_key_path,
+        passphrase: '',
+        remember_passphrase: 0,
         default_session: 0,
       });
       await loadSessionData();
     }, '复制会话失败');
     setTreeMenu(null);
+  };
+
+  const onOpenNewSessionMenu = async (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
+    const target = sessions.find((session) => session.id === menu.id);
+    setTreeMenu(null);
+    if (target) await connectSession(target, true);
   };
 
   const onEditSessionMenu = (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
@@ -180,12 +210,15 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onDeleteSessionMenu = async (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
-    if (!(await askConfirm(`确定删除会话 ${menu.name} 吗？`))) return;
+    const relatedTabs = tabs.filter((tab) => tab.sessionId === menu.id);
+    const openNotice = relatedTabs.length > 0 ? `\n该会话当前有 ${relatedTabs.length} 个连接，删除后将同时关闭。` : '';
+    setTreeMenu(null);
+    if (!(await askConfirm(`确定删除会话 ${menu.name} 吗？${openNotice}`))) return;
     await runMutation(async () => {
       await window.terminalApi.deleteSession(menu.id);
+      await Promise.all(relatedTabs.map((tab) => closeTab(tab.id)));
       await loadSessionData();
     }, '删除会话失败');
-    setTreeMenu(null);
   };
 
   const onCreateSessionInFolderMenu = (menu: Extract<TreeContextMenu, { type: 'folder' }>) => {
@@ -199,27 +232,27 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onEditFolderMenu = async (menu: Extract<TreeContextMenu, { type: 'folder' }>) => {
+    setTreeMenu(null);
     const name = await askPrompt('目录名称', menu.name);
-    if (!name || !name.trim() || name.trim() === menu.name) {
-      setTreeMenu(null);
+    if (name === null || name.trim() === menu.name) return;
+    if (!name.trim()) {
+      await showAlert('目录名称不能为空。', '重命名目录');
       return;
     }
     await runMutation(async () => {
       await window.terminalApi.updateFolder({ id: menu.id, name: name.trim() });
       await loadSessionData();
     }, '重命名目录失败');
-    setTreeMenu(null);
   };
 
   const onDeleteFolderMenu = async (menu: Extract<TreeContextMenu, { type: 'folder' }>) => {
+    setTreeMenu(null);
     if (!(await askConfirm(`确定删除目录 ${menu.name} 吗？`))) return;
     try {
       await window.terminalApi.deleteFolder(menu.id);
       await loadSessionData();
     } catch (error) {
       await showAlert(error instanceof Error ? error.message : String(error), '删除失败');
-    } finally {
-      setTreeMenu(null);
     }
   };
 
@@ -233,6 +266,7 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     onToggleSessionPassword: () => setShowSessionPassword((v) => !v),
     onToggleSessionFolderMenu: () => setSessionFolderMenuOpen((v) => !v),
     onPickSessionFolder,
+    onPickPrivateKey,
     onCancelSessionModal: () => {
       setSessionFolderMenuOpen(false);
       setShowSessionModal(false);
@@ -249,6 +283,7 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     },
     onConfirmFolderModal,
     onCopySessionMenu,
+    onOpenNewSessionMenu,
     onEditSessionMenu,
     onDeleteSessionMenu,
     onCreateSessionInFolderMenu,

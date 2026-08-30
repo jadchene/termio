@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('terminalApi', {
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
   isMaximizedWindow: () => ipcRenderer.invoke('window:is-maximized'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  onWindowCloseRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('window:close-requested', handler);
+    return () => ipcRenderer.off('window:close-requested', handler);
+  },
   writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   onMaximizedChanged: (callback) => {
     const handler = (_, data) => callback(data);
@@ -37,6 +42,7 @@ contextBridge.exposeInMainWorld('terminalApi', {
   createSession: (payload) => ipcRenderer.invoke('session:create', payload),
   updateSession: (payload) => ipcRenderer.invoke('session:update', payload),
   deleteSession: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
+  pickPrivateKey: (defaultPath) => ipcRenderer.invoke('dialog:pick-private-key', defaultPath),
 
   sshConnect: (payload) => ipcRenderer.invoke('ssh:connect', payload),
   sshSendInput: (payload) => ipcRenderer.send('ssh:input', payload),

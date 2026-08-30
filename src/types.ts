@@ -41,8 +41,12 @@ export type Session = {
   host: string;
   port: number;
   username: string;
+  auth_type: 'password' | 'private_key';
   password: string;
   remember_password: number;
+  private_key_path: string;
+  passphrase: string;
+  remember_passphrase: number;
   default_session: number;
 };
 
@@ -172,10 +176,20 @@ export type SftpTransferError = {
 export type TreeContextMenu =
   | { x: number; y: number; type: 'session'; id: number; name: string }
   | { x: number; y: number; type: 'folder'; id: number; name: string }
-  | { x: number; y: number; type: 'sftp'; sessionId: number; path: string; name: string; isDir: boolean };
+  | {
+      x: number;
+      y: number;
+      type: 'sftp';
+      sessionId: number;
+      path: string;
+      name: string;
+      isDir: boolean;
+      actionItems: Array<{ path: string; name: string; isDir: boolean }>;
+    };
 
 declare global {
   interface Window {
+    queryLocalFonts?: () => Promise<Array<{ family: string; fullName: string; postscriptName: string; style: string }>>;
     terminalApi: {
       getSettings: () => Promise<Settings>;
       updateSettings: (payload: Partial<Settings>) => Promise<Settings>;
@@ -184,6 +198,7 @@ declare global {
       toggleMaximizeWindow: () => Promise<boolean>;
       isMaximizedWindow: () => Promise<boolean>;
       closeWindow: () => Promise<void>;
+      onWindowCloseRequested: (callback: () => void) => () => void;
       writeClipboardText: (text: string) => Promise<boolean>;
       onMaximizedChanged: (cb: (maximized: boolean) => void) => () => void;
       setMetricsSession: (sessionId: number | null) => Promise<boolean>;
@@ -197,8 +212,16 @@ declare global {
       createSession: (payload: Omit<Session, 'id'>) => Promise<boolean>;
       updateSession: (payload: Session) => Promise<boolean>;
       deleteSession: (sessionId: number) => Promise<boolean>;
+      pickPrivateKey: (defaultPath?: string) => Promise<string>;
 
-      sshConnect: (payload: { sessionId: number; connectionId?: number; password?: string; savePassword?: boolean } | number) => Promise<boolean>;
+      sshConnect: (payload: {
+        sessionId: number;
+        connectionId?: number;
+        password?: string;
+        savePassword?: boolean;
+        passphrase?: string;
+        savePassphrase?: boolean;
+      } | number) => Promise<boolean>;
       sshSendInput: (payload: { sessionId: number; input: string }) => void;
       sshSend: (payload: { sessionId: number; input: string }) => Promise<boolean>;
       sshResize: (payload: { sessionId: number; cols: number; rows: number }) => Promise<boolean>;
