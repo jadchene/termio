@@ -24,7 +24,7 @@ import {
   cleanupConnectionState,
 } from './session';
 import { getRemoteShellCwd, updateCwdFromPrompt } from './ssh';
-import { safeSend } from './window';
+import { closeMainWindow, safeSend } from './window';
 import { switchToEnglishInputMethod } from './inputMethod';
 import { registerNativeFileDragIpc } from './nativeFileDrag';
 import { registerTrustedHandle, registerTrustedOn } from './ipcSecurity';
@@ -121,7 +121,7 @@ export function registerIpc() {
     if (!sharedState.mainWindow) return false;
     return sharedState.mainWindow.isMaximized();
   });
-  ipcMain.handle('window:close', () => sharedState.mainWindow?.close());
+  ipcMain.handle('window:close', () => closeMainWindow());
   ipcMain.handle('clipboard:write-text', async (_, text: unknown) => {
     clipboard.writeText(requireString(text, '剪贴板文本', 1024 * 1024, true));
     return true;

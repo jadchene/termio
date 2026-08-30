@@ -4,12 +4,14 @@ import { getParentSftpPath } from '../utils/sftpPath';
 import { formatSftpError, isSilentSftpError } from '../utils/sftpError';
 import { shouldApplyCwdCalibration } from '../utils/sftpCwd';
 import { resolveSftpContextTargets } from '../utils/sftpSelection';
+import { validateSftpEntryName } from '../utils/sftpEntryName';
 
 type SftpMenuPayload = Extract<TreeContextMenu, { type: 'sftp' }>;
 
 type UseSftpInteractionsParams = {
   activeSessionId: number | null;
   activeSession: Session | null;
+  isConnected: boolean;
   settings: Settings | null;
   setSettings: Dispatch<SetStateAction<Settings | null>>;
   sftpPath: string;
@@ -34,6 +36,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   const {
     activeSessionId,
     activeSession,
+    isConnected,
     settings,
     setSettings,
     sftpPath,
@@ -71,7 +74,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   }), [sftpInternalDragRef, showAlert]);
 
   const onDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !isConnected) return;
     e.preventDefault();
     if (sftpInternalDragRef.current) {
       e.dataTransfer.dropEffect = 'none';
@@ -83,7 +86,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !isConnected) return;
     e.preventDefault();
     if (sftpInternalDragRef.current) {
       e.dataTransfer.dropEffect = 'none';
@@ -101,7 +104,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setSftpUploadDropOver(false);
-    if (!activeSessionId) return;
+    if (!activeSessionId || !isConnected) return;
     const nativeDragToken = sftpInternalDragRef.current;
     if (nativeDragToken) {
       await runSftpAction(async () => {
@@ -120,7 +123,6 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
     const previewNames = droppedFiles.slice(0, 5).map((file) => file.name).join('、');
     const remaining = droppedFiles.length > 5 ? ` 等 ${droppedFiles.length} 项` : '';
     if (!await askConfirm(`确认上传本地文件：${previewNames}${remaining}？`, 'SFTP 上传')) return;
-    clearSftpSelectionNow();
     await runSftpAction(async () => {
       const uploadCapability = await window.terminalApi.sftpAuthorizeDroppedFiles(droppedFiles);
       await window.terminalApi.sftpUploadBatch({ sessionId: activeSessionId, remoteDir: sftpPath, uploadCapability });
@@ -129,7 +131,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onToggleShowHidden = async () => {
-    if (!settings) return;
+    if (!settings || !isConnected) return;
     try {
       const saved = await window.terminalApi.updateSettings({
         ui: { ...settings.ui, showHiddenFiles: !settings.ui.showHiddenFiles },
@@ -141,15 +143,16 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onRefresh = async () => {
-    clearSftpSelectionNow();
+    if (!isConnected) return;
     await runSftpAction(() => refreshSftp());
   };
   const onGoParent = async () => {
+    if (!isConnected) return;
     await runSftpAction(() => navigateSftp(getParentSftpPath(sftpPath)));
   };
 
   const onFollowCwd = async () => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !isConnected) return;
     const requestedSessionId = activeSessionId;
     let initialPath = '';
     try {
@@ -187,21 +190,25 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onCreateDir = async () => {
-    if (!activeSession || !activeSessionId) return;
+    if (!activeSession || !activeSessionId || !isConnected) return;
     const name = await askPrompt('目录名');
     if (!name) return;
+    const validated = validateSftpEntryName(name);
+    if (validated.error) {
+      await showAlert(validated.error, '新建目录');
+      return;
+    }
     await runSftpAction(async () => {
       await window.terminalApi.sftpMkdir({
         sessionId: activeSessionId,
-        path: `${sftpPath.replace(/\/$/, '')}/${name}`,
+        path: `${sftpPath.replace(/\/$/, '')}/${validated.value}`,
       });
       await refreshSftp();
     });
   };
 
   const onBatchUpload = async () => {
-    if (!activeSession || !activeSessionId) return;
-    clearSftpSelectionNow();
+    if (!activeSession || !activeSessionId || !isConnected) return;
     await runSftpAction(async () => {
       await window.terminalApi.sftpUploadBatch({ sessionId: activeSessionId, remoteDir: sftpPath });
       await refreshSftp();
@@ -209,20 +216,19 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onBatchDownload = async () => {
-    if (!activeSession || !activeSessionId) return;
+    if (!activeSession || !activeSessionId || !isConnected) return;
     const selectedPaths = selectedSftpPaths.filter((pathItem) => !!pathItem);
     if (selectedPaths.length === 0) {
       await showAlert('请选择文件或目录后再批量下载');
       return;
     }
-    clearSftpSelectionNow();
     await runSftpAction(() => window.terminalApi.sftpDownloadBatch({ sessionId: activeSessionId, remotePaths: selectedPaths }));
   };
 
   const onPathBlur = () => setSftpPathInput(sftpPath);
 
   const onStartItemDrag = (e: React.DragEvent<HTMLDivElement>, fullPath: string, draggedItem: SftpItem) => {
-    if (!activeSessionId) {
+    if (!activeSessionId || !isConnected) {
       e.preventDefault();
       return;
     }
@@ -253,11 +259,29 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
 
   const onEndItemDrag = () => undefined;
 
+  const onSelectItem = (fullPath: string, options: { additive: boolean; range: boolean }) => {
+    if (options.range) {
+      setSftpSelection(fullPath, true, true);
+      return;
+    }
+    if (options.additive) {
+      setSftpSelection(fullPath, !selectedSftpPaths.includes(fullPath));
+      return;
+    }
+    if (selectedSftpPaths.length === 1 && selectedSftpPaths[0] === fullPath) return;
+    clearSftpSelectionNow();
+    setSftpSelection(fullPath, true);
+  };
+
   const onOpenItemMenu = (e: React.MouseEvent, payload: { path: string; name: string; isDir: boolean }) => {
-    if (!activeSession || !activeSessionId) return;
+    if (!activeSession || !activeSessionId || !isConnected) return;
     e.preventDefault();
     e.stopPropagation();
     const downloadPaths = resolveSftpContextTargets(payload.path, selectedSftpPaths);
+    const itemByPath = new Map(sftpItems.map((item) => {
+      const path = `${sftpPath.replace(/\/$/, '')}/${item.name}`;
+      return [path, { path, name: item.name, isDir: item.type === 'd' }] as const;
+    }));
     if (!selectedSftpPaths.includes(payload.path)) {
       clearSftpSelectionNow();
       setSftpSelection(payload.path, true);
@@ -270,40 +294,54 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
       path: payload.path,
       name: payload.name,
       isDir: payload.isDir,
-      downloadPaths,
+      actionItems: downloadPaths.map((path) => itemByPath.get(path) ?? {
+        path,
+        name: path.replace(/\/+$/, '').split('/').pop() || path,
+        isDir: path === payload.path ? payload.isDir : false,
+      }),
     });
   };
 
   const onDownloadSftpMenu = async (menu: SftpMenuPayload) => {
     setTreeMenu(null);
-    clearSftpSelectionNow();
     await runSftpAction(async () => {
-      await window.terminalApi.sftpDownloadBatch({ sessionId: menu.sessionId, remotePaths: menu.downloadPaths });
+      await window.terminalApi.sftpDownloadBatch({ sessionId: menu.sessionId, remotePaths: menu.actionItems.map((item) => item.path) });
     });
   };
 
   const onRenameSftpMenu = async (menu: SftpMenuPayload) => {
+    setTreeMenu(null);
     const newName = await askPrompt('新名称', menu.name);
-    if (!newName || newName === menu.name) {
-      setTreeMenu(null);
+    if (!newName || newName === menu.name) return;
+    const validated = validateSftpEntryName(newName);
+    if (validated.error) {
+      await showAlert(validated.error, '重命名');
       return;
     }
     const parentDir = menu.path.replace(/\/[^/]+$/, '') || '/';
-    const nextPath = `${parentDir.replace(/\/$/, '')}/${newName}`;
+    const nextPath = `${parentDir.replace(/\/$/, '')}/${validated.value}`;
     await runSftpAction(async () => {
       await window.terminalApi.sftpRename({ sessionId: menu.sessionId, from: menu.path, to: nextPath });
       await refreshSftp();
-      setTreeMenu(null);
     });
   };
 
   const onDeleteSftpMenu = async (menu: SftpMenuPayload) => {
-    if (!(await askConfirm(`确定删除 ${menu.name} 吗？`))) return;
-    await runSftpAction(async () => {
-      await window.terminalApi.sftpDelete({ sessionId: menu.sessionId, path: menu.path, isDir: menu.isDir });
-      await refreshSftp();
-      setTreeMenu(null);
-    });
+    const count = menu.actionItems.length;
+    setTreeMenu(null);
+    if (!(await askConfirm(count > 1 ? `确定删除所选 ${count} 项吗？此操作不可撤销。` : `确定删除 ${menu.name} 吗？`))) return;
+    const failures: string[] = [];
+    for (const item of menu.actionItems) {
+      try {
+        await window.terminalApi.sftpDelete({ sessionId: menu.sessionId, path: item.path, isDir: item.isDir });
+      } catch (error) {
+        failures.push(`${item.name}: ${formatSftpError(error)}`);
+      }
+    }
+    await runSftpAction(() => refreshSftp());
+    if (failures.length > 0) {
+      await showAlert(`删除完成，但有 ${failures.length} 项失败：\n${failures.slice(0, 8).join('\n')}`, 'SFTP 删除结果');
+    }
   };
 
   return {
@@ -323,6 +361,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
     onPathBlur,
     onStartItemDrag,
     onEndItemDrag,
+    onSelectItem,
     onOpenItemMenu,
     onToggleItemSelect: setSftpSelection,
     onOpenDir: async (nextPath: string) => {

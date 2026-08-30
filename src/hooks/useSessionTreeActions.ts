@@ -17,6 +17,7 @@ function buildCopiedSessionName(baseName: string, existingNames: Set<string>): s
 
 type UseSessionTreeActionsParams = {
   sessions: Session[];
+  tabs: Array<{ id: number; sessionId: number }>;
   editingSession: Session | null;
   sessionForm: SessionForm;
   folderName: string;
@@ -37,11 +38,13 @@ type UseSessionTreeActionsParams = {
   askPrompt: (message: string, initialValue?: string, title?: string) => Promise<string | null>;
   showAlert: (message: string, title?: string) => Promise<void>;
   connectSession: (session: Session, forceNew?: boolean) => Promise<void>;
+  closeTab: (tabId: number) => Promise<void>;
 };
 
 export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   const {
     sessions,
+    tabs,
     editingSession,
     sessionForm,
     folderName,
@@ -62,6 +65,7 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
     askPrompt,
     showAlert,
     connectSession,
+    closeTab,
   } = params;
 
   const runMutation = async (action: () => Promise<void>, title: string): Promise<boolean> => {
@@ -151,18 +155,18 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
 
   const onConfirmFolderModal = async () => {
     if (!folderName.trim()) {
-      await showAlert('请输入目录名');
-      return;
+      return false;
     }
     const saved = await runMutation(async () => {
       await window.terminalApi.createFolder({ name: folderName.trim(), parentId: folderParent });
       await loadSessionData();
     }, '创建目录失败');
-    if (!saved) return;
+    if (!saved) return false;
     setFolderName('');
     setFolderParent(null);
     setFolderParentMenuOpen(false);
     setShowFolderModal(false);
+    return true;
   };
 
   const onCopySessionMenu = async (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
@@ -206,12 +210,15 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onDeleteSessionMenu = async (menu: Extract<TreeContextMenu, { type: 'session' }>) => {
-    if (!(await askConfirm(`确定删除会话 ${menu.name} 吗？`))) return;
+    const relatedTabs = tabs.filter((tab) => tab.sessionId === menu.id);
+    const openNotice = relatedTabs.length > 0 ? `\n该会话当前有 ${relatedTabs.length} 个连接，删除后将同时关闭。` : '';
+    setTreeMenu(null);
+    if (!(await askConfirm(`确定删除会话 ${menu.name} 吗？${openNotice}`))) return;
     await runMutation(async () => {
       await window.terminalApi.deleteSession(menu.id);
+      await Promise.all(relatedTabs.map((tab) => closeTab(tab.id)));
       await loadSessionData();
     }, '删除会话失败');
-    setTreeMenu(null);
   };
 
   const onCreateSessionInFolderMenu = (menu: Extract<TreeContextMenu, { type: 'folder' }>) => {
@@ -225,27 +232,27 @@ export function useSessionTreeActions(params: UseSessionTreeActionsParams) {
   };
 
   const onEditFolderMenu = async (menu: Extract<TreeContextMenu, { type: 'folder' }>) => {
+    setTreeMenu(null);
     const name = await askPrompt('目录名称', menu.name);
-    if (!name || !name.trim() || name.trim() === menu.name) {
-      setTreeMenu(null);
+    if (name === null || name.trim() === menu.name) return;
+    if (!name.trim()) {
+      await showAlert('目录名称不能为空。', '重命名目录');
       return;
     }
     await runMutation(async () => {
       await window.terminalApi.updateFolder({ id: menu.id, name: name.trim() });
       await loadSessionData();
     }, '重命名目录失败');
-    setTreeMenu(null);
   };
 
   const onDeleteFolderMenu = async (menu: Extract<TreeContextMenu, { type: 'folder' }>) => {
+    setTreeMenu(null);
     if (!(await askConfirm(`确定删除目录 ${menu.name} 吗？`))) return;
     try {
       await window.terminalApi.deleteFolder(menu.id);
       await loadSessionData();
     } catch (error) {
       await showAlert(error instanceof Error ? error.message : String(error), '删除失败');
-    } finally {
-      setTreeMenu(null);
     }
   };
 

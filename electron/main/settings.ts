@@ -64,7 +64,7 @@ export function normalizeSettings(parsed: any): AppSettings {
       mode,
       backgroundColor: mode === 'light' ? '#FFFFFF' : '#000000',
       foregroundColor: mode === 'light' ? '#1F2328' : '#E5E7EB',
-      uiFontFamily: 'MiSans, sans-serif',
+      uiFontFamily: String(parsed?.theme?.uiFontFamily || defaultSettings.theme.uiFontFamily),
     },
     behavior: { ...defaultSettings.behavior, ...behavior },
     ui: { ...defaultSettings.ui, ...((parsed && parsed.ui) || {}) },

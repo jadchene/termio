@@ -23,6 +23,8 @@ export function useSftpPanel(params: UseSftpPanelParams) {
   const showHiddenFilesRef = useRef(showHiddenFiles);
   const sftpSelectionAnchorRef = useRef<Map<number, string | null>>(new Map());
   const listRequestSequenceRef = useRef<Map<number, number>>(new Map());
+  activeSessionIdRef.current = activeSessionId;
+  showHiddenFilesRef.current = showHiddenFiles;
   const activeState = activeSessionId == null
     ? createSessionSftpState()
     : sessionStateById.get(activeSessionId) ?? createSessionSftpState();
@@ -62,12 +64,8 @@ export function useSftpPanel(params: UseSftpPanelParams) {
   }, [updateSessionState]);
 
   useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
+    setSftpUploadDropOver(false);
   }, [activeSessionId]);
-
-  useEffect(() => {
-    showHiddenFilesRef.current = showHiddenFiles;
-  }, [showHiddenFiles]);
 
   const refreshSftp = useCallback(async (pathInput?: string): Promise<boolean> => {
     const sessionId = activeSessionIdRef.current;

@@ -12,6 +12,7 @@ import type { ConnectionState } from '../types';
 
 type UseAppBootstrapParams = {
   activeSessionIdRef: MutableRefObject<number | null>;
+  tabsRef: MutableRefObject<Array<{ id: number }>>;
   setSettings: Dispatch<SetStateAction<Settings | null>>;
   setRuntimeInfo: Dispatch<
     SetStateAction<{
@@ -48,6 +49,7 @@ export function useAppBootstrap(params: UseAppBootstrapParams) {
   const [bootstrapError, setBootstrapError] = useState('');
   const {
     activeSessionIdRef,
+    tabsRef,
     setSettings,
     setRuntimeInfo,
     setFolders,
@@ -151,11 +153,12 @@ export function useAppBootstrap(params: UseAppBootstrapParams) {
       handlers.writeTerminalOutput(sessionId, cleanData, term);
     });
     const unClosed = window.terminalApi.onSshClosed(({ sessionId }) => {
+      if (!tabsRef.current.some((tab) => tab.id === sessionId)) return;
       disconnectedByTabRef.current.set(sessionId, true);
       reconnectingTabRef.current.delete(sessionId);
       setConnectionState(sessionId, 'disconnected');
       const term = terminalMapRef.current.get(sessionId);
-      term?.writeln('\r\n[连接已关闭，按 R 重连]');
+      if (term) handlerRef.current.writeTerminalOutput(sessionId, '\r\n[连接已关闭，按 R 重连]\r\n', term);
     });
     const unMetrics = window.terminalApi.onMetrics((payload) => {
       const previousSequence = metricsSequenceRef.current.get(payload.sessionId) ?? -1;
@@ -186,6 +189,7 @@ export function useAppBootstrap(params: UseAppBootstrapParams) {
     };
   }, [
     activeSessionIdRef,
+    tabsRef,
     disconnectedByTabRef,
     reconnectingTabRef,
     setIsMaximized,

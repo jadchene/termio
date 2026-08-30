@@ -32,6 +32,7 @@ type SidebarShellProps = {
   };
   activeSessionId: number | null;
   activeSession: Session | null;
+  activeSessionConnected: boolean;
   settingsShowHiddenFiles: boolean;
   sftpPath: string;
   sftpPathInput: string;
@@ -58,6 +59,7 @@ type SidebarShellProps = {
     onPathBlur: () => void;
     onStartItemDrag: (e: DragEvent<HTMLDivElement>, fullPath: string, item: SftpItem) => void;
     onEndItemDrag: () => void;
+    onSelectItem: (fullPath: string, options: { additive: boolean; range: boolean }) => void;
     onOpenItemMenu: (e: MouseEvent, payload: { path: string; name: string; isDir: boolean }) => void;
     onToggleItemSelect: (fullPath: string, checked: boolean, range?: boolean) => void;
     onOpenDir: (nextPath: string) => Promise<void>;
@@ -81,6 +83,7 @@ export function SidebarShell(props: SidebarShellProps) {
     sessionTreeActions,
     activeSessionId,
     activeSession,
+    activeSessionConnected,
     settingsShowHiddenFiles,
     sftpPath,
     sftpPathInput,
@@ -146,7 +149,7 @@ export function SidebarShell(props: SidebarShellProps) {
       {sidebarTab === 'sftp' && (
         <SftpPanel
           activeSessionId={activeSessionId}
-          hasActiveSession={!!activeSession}
+          hasActiveSession={!!activeSession && activeSessionConnected}
           showHiddenFiles={settingsShowHiddenFiles}
           sftpPath={sftpPath}
           sftpPathInput={sftpPathInput}
@@ -172,6 +175,7 @@ export function SidebarShell(props: SidebarShellProps) {
           onPathBlur={sftpInteractions.onPathBlur}
           onStartItemDrag={sftpInteractions.onStartItemDrag}
           onEndItemDrag={sftpInteractions.onEndItemDrag}
+          onSelectItem={sftpInteractions.onSelectItem}
           onOpenItemMenu={sftpInteractions.onOpenItemMenu}
           onToggleItemSelect={sftpInteractions.onToggleItemSelect}
           onOpenDir={sftpInteractions.onOpenDir}

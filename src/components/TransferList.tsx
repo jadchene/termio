@@ -13,7 +13,7 @@ type TransferRow = {
   percent: number;
   transferred: number;
   total: number;
-  status: 'running' | 'done' | 'error' | 'cancelled';
+  status: 'running' | 'cancelling' | 'done' | 'error' | 'cancelled';
 };
 
 type TransferListProps = {
@@ -23,30 +23,43 @@ type TransferListProps = {
 
 export const TransferList = ({ rows, onCancel }: TransferListProps) => {
   if (rows.length === 0) return null;
-  const row = rows[0];
-  const summary = row.totalCount === 0 || row.name.includes('正在统计文件数量')
-    ? '准备中'
-    : row.totalCount > 1
-      ? `${Math.min(row.completedCount, row.totalCount)} / ${row.totalCount}`
-      : row.name;
 
   return (
-    <div className={`transfer-strip transfer-${row.status}`} title={row.name}>
-      <span className="transfer-direction">
-        {row.direction === 'upload' ? <UploadOutlined /> : <DownloadOutlined />}
-      </span>
-      <div className="transfer-summary">
-        <div className="transfer-title">
-          <span>{row.direction === 'upload' ? '上传' : '下载'}</span>
-          <span className="transfer-name">{summary}</span>
-          <span>{row.percent.toFixed(0)}%</span>
-        </div>
-        <Progress percent={row.percent} showInfo={false} size="small" status={row.status === 'error' ? 'exception' : undefined} />
-      </div>
-      <Tooltip title={row.status === 'running' ? '取消传输' : '移除记录'}>
-        <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => onCancel(row)} />
-      </Tooltip>
-      {rows.length > 1 && <span className="transfer-count">+{rows.length - 1}</span>}
+    <div className="transfer-list" aria-label="文件传输任务">
+      {rows.map((row) => {
+        const summary = row.status === 'cancelling'
+          ? '正在取消…'
+          : row.totalCount === 0 || row.name.includes('正在统计文件数量')
+            ? '准备中'
+            : row.totalCount > 1
+              ? `${Math.min(row.completedCount, row.totalCount)} / ${row.totalCount}`
+              : row.name;
+        return (
+          <div key={row.key} className={`transfer-strip transfer-${row.status}`} title={row.name}>
+            <span className="transfer-direction">
+              {row.direction === 'upload' ? <UploadOutlined /> : <DownloadOutlined />}
+            </span>
+            <div className="transfer-summary">
+              <div className="transfer-title">
+                <span>{row.direction === 'upload' ? '上传' : '下载'}</span>
+                <span className="transfer-name">{summary}</span>
+                <span>{row.percent.toFixed(0)}%</span>
+              </div>
+              <Progress percent={row.percent} showInfo={false} size="small" status={row.status === 'error' ? 'exception' : undefined} />
+            </div>
+            <Tooltip title={row.status === 'running' ? '取消传输' : row.status === 'cancelling' ? '正在取消' : '移除记录'}>
+              <Button
+                aria-label={row.status === 'running' ? `取消 ${row.name}` : `移除 ${row.name}`}
+                disabled={row.status === 'cancelling'}
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={() => onCancel(row)}
+              />
+            </Tooltip>
+          </div>
+        );
+      })}
     </div>
   );
 };

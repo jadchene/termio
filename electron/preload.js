@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('terminalApi', {
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
   isMaximizedWindow: () => ipcRenderer.invoke('window:is-maximized'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  onWindowCloseRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('window:close-requested', handler);
+    return () => ipcRenderer.off('window:close-requested', handler);
+  },
   writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   onMaximizedChanged: (callback) => {
     const handler = (_, data) => callback(data);

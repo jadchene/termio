@@ -6,6 +6,18 @@ import { appRoot, windowStatePath, preloadCandidates, preloadPath, rendererDevUr
 import { sharedState } from './state';
 
 let persistWindowStateTimer: NodeJS.Timeout | null = null;
+let rendererApprovedClose = false;
+
+export function approveMainWindowClose(): void {
+  rendererApprovedClose = true;
+}
+
+export function closeMainWindow(): void {
+  const target = sharedState.mainWindow;
+  if (!target || target.isDestroyed()) return;
+  approveMainWindowClose();
+  target.close();
+}
 
 export function readWindowState(): WindowState | null {
   try {
@@ -105,6 +117,15 @@ export function createWindow() {
       sandbox: true,
     },
   });
+  const rendererWebContents = sharedState.mainWindow.webContents;
+  const rendererSession = rendererWebContents.session;
+  const allowedRendererPermissions = new Set(['local-fonts', 'clipboard-read']);
+  rendererSession.setPermissionCheckHandler((webContents, permission) => (
+    webContents === rendererWebContents && allowedRendererPermissions.has(String(permission))
+  ));
+  rendererSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(webContents === rendererWebContents && allowedRendererPermissions.has(String(permission)));
+  });
   const csp = rendererDevUrl
     ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://localhost:5173 ws://localhost:5173; object-src 'none'; base-uri 'none'; frame-src 'none'"
     : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'";
@@ -151,7 +172,15 @@ export function createWindow() {
   if (savedState?.maximized) {
     sharedState.mainWindow.maximize();
   }
-  sharedState.mainWindow.on('close', () => flushWindowState(sharedState.mainWindow));
+  sharedState.mainWindow.on('close', (event) => {
+    if (!rendererApprovedClose) {
+      event.preventDefault();
+      safeSend('window:close-requested');
+      return;
+    }
+    rendererApprovedClose = false;
+    flushWindowState(sharedState.mainWindow);
+  });
   sharedState.mainWindow.on('closed', () => {
     sharedState.mainWindow = null;
   });

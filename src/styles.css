@@ -456,6 +456,8 @@ select { font: inherit; }
   padding: 1px 7px;
   border-radius: 5px;
   cursor: default;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 31px;
 }
 .sftp-row { transition: background-color .16s ease; }
 .sftp-row:hover { background: var(--app-item-hover); }
@@ -491,6 +493,9 @@ select { font: inherit; }
   background: var(--app-panel-raised);
   border-top: 1px solid var(--app-border);
 }
+.transfer-list { flex: 0 0 auto; max-height: 156px; overflow: auto; border-top: 1px solid var(--app-border); }
+.transfer-list .transfer-strip { border-top: 0; border-bottom: 1px solid var(--app-border-soft); }
+.transfer-list .transfer-strip:last-child { border-bottom: 0; }
 .transfer-direction { color: #4f8cff; }
 .transfer-summary { flex: 1; min-width: 0; }
 .transfer-title { display: flex; gap: 6px; min-width: 0; color: var(--app-muted); font-size: 11px; }

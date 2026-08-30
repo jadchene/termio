@@ -73,6 +73,7 @@ export const DialogModal = (props: DialogModalProps) => {
               <Button
                 type="text"
                 size="small"
+                aria-label={showDialogPassword ? '隐藏输入内容' : '显示输入内容'}
                 icon={showDialogPassword ? <EyeInvisibleOutlined /> : <EyeOutlined />}
                 onClick={() => onSetShowDialogPassword(!showDialogPassword)}
               />

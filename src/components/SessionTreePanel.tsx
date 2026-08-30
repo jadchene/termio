@@ -1,6 +1,6 @@
 import { DownOutlined, FolderAddOutlined, FolderOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons';
 import { Button, Empty, Tooltip } from 'antd';
-import type { MouseEvent } from 'react';
+import { useMemo, type MouseEvent } from 'react';
 import type { ReactNode } from 'react';
 import type { Folder, Session } from '../types';
 
@@ -54,10 +54,27 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
     onCreateSession,
   } = props;
 
+  const sessionsByFolder = useMemo(() => {
+    const grouped = new Map<number | null, Session[]>();
+    for (const session of [...sessions].sort(compareByNameThenId)) {
+      const list = grouped.get(session.folder_id) || [];
+      list.push(session);
+      grouped.set(session.folder_id, list);
+    }
+    return grouped;
+  }, [sessions]);
+  const foldersByParent = useMemo(() => {
+    const grouped = new Map<number | null, Folder[]>();
+    for (const folder of [...folders].sort(compareByNameThenId)) {
+      const list = grouped.get(folder.parent_id) || [];
+      list.push(folder);
+      grouped.set(folder.parent_id, list);
+    }
+    return grouped;
+  }, [folders]);
+
   const renderSessionList = (folderId: number | null): ReactNode[] =>
-    sessions
-      .filter((session) => session.folder_id === folderId)
-      .sort(compareByNameThenId)
+    (sessionsByFolder.get(folderId) || [])
       .map((session) => (
         <div key={session.id} className="session-node" onContextMenu={(e) => onOpenSessionMenu(e, session)}>
           <button
@@ -73,9 +90,7 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
       ));
 
   const renderFolderTree = (parentId: number | null): ReactNode[] =>
-    folders
-      .filter((folder) => folder.parent_id === parentId)
-      .sort(compareByNameThenId)
+    (foldersByParent.get(parentId) || [])
       .map((folder) => (
         <div key={folder.id} className="folder-node">
           <button className="folder-title" aria-expanded={expandedFolderIds.has(folder.id)} onClick={() => onToggleFolder(folder.id)} onContextMenu={(e) => onOpenFolderMenu(e, folder)}>

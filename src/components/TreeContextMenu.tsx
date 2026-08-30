@@ -35,7 +35,24 @@ export function TreeContextMenu(props: TreeContextMenuProps) {
   const position = clampContextMenuPosition(menu.x, menu.y, window.innerWidth, window.innerHeight);
 
   return (
-    <div className="tree-context-menu" role="menu" style={position} onClick={(e) => e.stopPropagation()}>
+    <div
+      className="tree-context-menu"
+      role="menu"
+      style={position}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(event) => {
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+        if (buttons.length === 0) return;
+        event.preventDefault();
+        const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        const nextIndex = event.key === 'Home' ? 0
+          : event.key === 'End' ? buttons.length - 1
+            : event.key === 'ArrowDown' ? (currentIndex + 1 + buttons.length) % buttons.length
+              : (currentIndex - 1 + buttons.length) % buttons.length;
+        buttons[nextIndex].focus();
+      }}
+    >
       {menu.type === 'session' ? (
         <>
           <button role="menuitem" autoFocus onClick={() => void onOpenNewSession(menu)}>新建连接</button>
@@ -57,11 +74,11 @@ export function TreeContextMenu(props: TreeContextMenuProps) {
       ) : (
         <>
           <button role="menuitem" autoFocus onClick={() => void onDownloadSftp(menu)}>
-            {menu.downloadPaths.length > 1 ? `下载所选 ${menu.downloadPaths.length} 项` : '下载'}
+            {menu.actionItems.length > 1 ? `下载所选 ${menu.actionItems.length} 项` : '下载'}
           </button>
-          <button role="menuitem" onClick={() => void onRenameSftp(menu)}>重命名</button>
+          {menu.actionItems.length === 1 && <button role="menuitem" onClick={() => void onRenameSftp(menu)}>重命名</button>}
           <button role="menuitem" className="danger" onClick={() => void onDeleteSftp(menu)}>
-            删除
+            {menu.actionItems.length > 1 ? `删除所选 ${menu.actionItems.length} 项` : '删除'}
           </button>
         </>
       )}

@@ -176,10 +176,20 @@ export type SftpTransferError = {
 export type TreeContextMenu =
   | { x: number; y: number; type: 'session'; id: number; name: string }
   | { x: number; y: number; type: 'folder'; id: number; name: string }
-  | { x: number; y: number; type: 'sftp'; sessionId: number; path: string; name: string; isDir: boolean; downloadPaths: string[] };
+  | {
+      x: number;
+      y: number;
+      type: 'sftp';
+      sessionId: number;
+      path: string;
+      name: string;
+      isDir: boolean;
+      actionItems: Array<{ path: string; name: string; isDir: boolean }>;
+    };
 
 declare global {
   interface Window {
+    queryLocalFonts?: () => Promise<Array<{ family: string; fullName: string; postscriptName: string; style: string }>>;
     terminalApi: {
       getSettings: () => Promise<Settings>;
       updateSettings: (payload: Partial<Settings>) => Promise<Settings>;
@@ -188,6 +198,7 @@ declare global {
       toggleMaximizeWindow: () => Promise<boolean>;
       isMaximizedWindow: () => Promise<boolean>;
       closeWindow: () => Promise<void>;
+      onWindowCloseRequested: (callback: () => void) => () => void;
       writeClipboardText: (text: string) => Promise<boolean>;
       onMaximizedChanged: (cb: (maximized: boolean) => void) => () => void;
       setMetricsSession: (sessionId: number | null) => Promise<boolean>;

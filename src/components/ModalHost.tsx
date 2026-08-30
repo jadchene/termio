@@ -65,7 +65,7 @@ type ModalHostProps = {
     onToggleFolderParentMenu: () => void;
     onPickFolderParent: (folderId: number | null) => void;
     onCancelFolderModal: () => void;
-    onConfirmFolderModal: () => Promise<void>;
+    onConfirmFolderModal: () => Promise<boolean>;
     onCopySessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => Promise<void>;
     onOpenNewSessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => Promise<void>;
     onEditSessionMenu: (menu: Extract<TreeContextMenu, { type: 'session' }>) => void;
@@ -78,7 +78,7 @@ type ModalHostProps = {
   settingsActions: {
     pickDefaultDownloadDir: () => Promise<void>;
     cancelSettingsModal: () => void;
-    saveSettingsModal: () => Promise<void>;
+    saveSettingsModal: () => Promise<boolean>;
   };
   sftpInteractions: {
     onDownloadSftpMenu: (menu: Extract<TreeContextMenu, { type: 'sftp' }>) => Promise<void>;

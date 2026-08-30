@@ -101,6 +101,7 @@ export function useDialog() {
       remember: boolean,
       title = '输入密码',
       requestKey?: string,
+      rememberLabel = '记住密码',
     ): Promise<PasswordPromptResult | null> =>
       openDialog<PasswordPromptResult | null>({
         type: 'prompt',
@@ -108,7 +109,7 @@ export function useDialog() {
         message,
         defaultValue: '',
         inputType: 'password',
-        rememberOption: { label: '记住密码', defaultValue: remember },
+        rememberOption: { label: rememberLabel, defaultValue: remember },
         requestKey,
       }),
     [openDialog],

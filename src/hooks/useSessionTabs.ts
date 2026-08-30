@@ -3,11 +3,11 @@ import type { Metrics, Session, Settings } from '../types';
 import type { PasswordPromptResult } from './useDialog';
 import { isSshConnectCancelledError } from '../utils/sshConnection';
 import type { ConnectionState } from '../types';
+import { resolveTabsAfterClose } from '../utils/tabNavigation';
 
 type Tab = { id: number; sessionId: number; title: string };
 
 type UseSessionTabsParams = {
-  activeSessionId: number | null;
   setTabs: Dispatch<SetStateAction<Tab[]>>;
   setActiveSessionId: Dispatch<SetStateAction<number | null>>;
   setSessions: Dispatch<SetStateAction<Session[]>>;
@@ -31,6 +31,7 @@ type UseSessionTabsParams = {
     remember: boolean,
     title?: string,
     requestKey?: string,
+    rememberLabel?: string,
   ) => Promise<PasswordPromptResult | null>;
   cancelDialogRequest: (requestKey: string, value?: null) => boolean;
   showAlert: (message: string, title?: string) => Promise<void>;
@@ -41,7 +42,6 @@ type UseSessionTabsParams = {
 
 export function useSessionTabs(params: UseSessionTabsParams) {
   const {
-    activeSessionId,
     setTabs,
     setActiveSessionId,
     setSessions,
@@ -68,6 +68,10 @@ export function useSessionTabs(params: UseSessionTabsParams) {
     setConnectionState,
   } = params;
   const closedTabIdsRef = useRef<Set<number>>(new Set());
+  const activateTab = (tabId: number | null) => {
+    activeSessionIdRef.current = tabId;
+    setActiveSessionId(tabId);
+  };
 
   const wasConnectionCancelled = (tabId: number, error: unknown): boolean => (
     closedTabIdsRef.current.has(tabId) || isSshConnectCancelledError(error)
@@ -120,6 +124,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
           privateKeyAuth ? session.remember_passphrase === 1 : session.remember_password === 1,
           '重连认证',
           `ssh-connect:${tabId}`,
+          privateKeyAuth ? '记住私钥口令' : '记住密码',
         );
         if (closedTabIdsRef.current.has(tabId)) return;
         if (!passwordResult?.value) {
@@ -178,7 +183,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
     if (!forceNew) {
       const existing = tabsRef.current.find((it) => it.sessionId === session.id);
       if (existing) {
-        setActiveSessionId(existing.id);
+        activateTab(existing.id);
         return;
       }
     }
@@ -189,17 +194,17 @@ export function useSessionTabs(params: UseSessionTabsParams) {
       tabsRef.current = tabsRef.current.filter((it) => it.id !== tabId);
       setTabs((prev) => prev.filter((it) => it.id !== tabId));
       setConnectionState(tabId, null);
-      setActiveSessionId((current) => current === tabId
-        ? tabsRef.current.some((it) => it.id === previousActiveSessionId)
+      if (activeSessionIdRef.current === tabId) {
+        activateTab(tabsRef.current.some((it) => it.id === previousActiveSessionId)
           ? previousActiveSessionId
-          : tabsRef.current.at(-1)?.id ?? null
-        : current);
+          : tabsRef.current.at(-1)?.id ?? null);
+      }
     };
     const newTab = { id: tabId, sessionId: session.id, title: session.name };
     tabsRef.current = [...tabsRef.current, newTab];
     setTabs((prev) => prev.some((it) => it.id === tabId) ? prev : [...prev, newTab]);
     setConnectionState(tabId, 'connecting');
-    setActiveSessionId(tabId);
+    activateTab(tabId);
     try {
       await window.terminalApi.sshConnect({ sessionId: session.id, connectionId: tabId });
       if (closedTabIdsRef.current.has(tabId)) {
@@ -209,7 +214,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
       disconnectedByTabRef.current.set(tabId, false);
       setConnectionState(tabId, 'connected');
       if (settings) attachTerminal(tabId, settings);
-      setActiveSessionId(tabId);
+      activateTab(tabId);
     } catch (error) {
       if (wasConnectionCancelled(tabId, error)) return;
       const message = String(error);
@@ -228,6 +233,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
           privateKeyAuth ? session.remember_passphrase === 1 : session.remember_password === 1,
           '连接认证',
           `ssh-connect:${tabId}`,
+          privateKeyAuth ? '记住私钥口令' : '记住密码',
         );
         if (closedTabIdsRef.current.has(tabId)) return;
         if (!passwordResult?.value) {
@@ -267,7 +273,7 @@ export function useSessionTabs(params: UseSessionTabsParams) {
             )),
           );
           if (settings) attachTerminal(tabId, settings);
-          setActiveSessionId(tabId);
+          activateTab(tabId);
           return;
         } catch (retryError) {
           if (wasConnectionCancelled(tabId, retryError)) return;
@@ -285,24 +291,21 @@ export function useSessionTabs(params: UseSessionTabsParams) {
   const closeTab = async (tabId: number) => {
     closedTabIdsRef.current.add(tabId);
     cancelDialogRequest(`ssh-connect:${tabId}`, null);
-    await window.terminalApi.sshDisconnect(tabId).catch(() => null);
+    const nextTabState = resolveTabsAfterClose(tabsRef.current, activeSessionIdRef.current, tabId);
+    tabsRef.current = nextTabState.tabs;
+    setTabs(nextTabState.tabs);
+    activateTab(nextTabState.activeTabId);
     disposeTerminal(tabId);
     clearSftpSessionState(tabId);
     reconnectingTabRef.current.delete(tabId);
     disconnectedByTabRef.current.delete(tabId);
     setConnectionState(tabId, null);
-    setTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      if (activeSessionId === tabId) {
-        setActiveSessionId(next.length > 0 ? next[0].id : null);
-      }
-      return next;
-    });
     setMetricsBySession((prev) => {
       const next = { ...prev };
       delete next[tabId];
       return next;
     });
+    await window.terminalApi.sshDisconnect(tabId).catch(() => null);
   };
 
   return {
