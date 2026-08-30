@@ -1,6 +1,9 @@
 const DEFAULT_MAX_QUEUED_CHARS = 16 * 1024 * 1024;
 const TRUNCATION_NOTICE = '\r\n\x1b[33m[终端渲染积压超过 16 MiB，已丢弃最旧内容]\x1b[0m\r\n';
 
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
 export class TerminalWriteQueue {
   private readonly chunks: string[] = [];
   private head = 0;
@@ -23,8 +26,12 @@ export class TerminalWriteQueue {
         this.head += 1;
         this.headOffset = 0;
       } else {
-        this.headOffset += overflow;
-        this.queuedChars -= overflow;
+        const requestedOffset = this.headOffset + overflow;
+        const nextOffset = isLowSurrogate(this.chunks[this.head].charCodeAt(requestedOffset))
+          ? requestedOffset + 1
+          : requestedOffset;
+        this.queuedChars -= nextOffset - this.headOffset;
+        this.headOffset = nextOffset;
         overflow = 0;
       }
       this.truncated = true;
@@ -43,11 +50,17 @@ export class TerminalWriteQueue {
     while (remaining > 0 && this.head < this.chunks.length) {
       const chunk = this.chunks[this.head];
       const available = chunk.length - this.headOffset;
-      const size = Math.min(remaining, available);
+      const requestedSize = Math.min(remaining, available);
+      const requestedEnd = this.headOffset + requestedSize;
+      let safeEnd = requestedEnd < chunk.length && isHighSurrogate(chunk.charCodeAt(requestedEnd - 1))
+        ? requestedEnd - 1
+        : requestedEnd;
+      if (safeEnd === this.headOffset && available >= 2) safeEnd = this.headOffset + 2;
+      const size = safeEnd - this.headOffset;
       result += chunk.slice(this.headOffset, this.headOffset + size);
       this.headOffset += size;
       this.queuedChars -= size;
-      remaining -= size;
+      remaining = Math.max(0, remaining - size);
       if (this.headOffset === chunk.length) {
         this.head += 1;
         this.headOffset = 0;

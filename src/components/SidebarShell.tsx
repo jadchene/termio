@@ -6,7 +6,7 @@ import {
   SettingOutlined,
   SlidersOutlined,
 } from '@ant-design/icons';
-import { Button, Tooltip } from 'antd';
+import { Button } from 'antd';
 import type { DragEvent, MouseEvent } from 'react';
 import type { Folder, Metrics, Session, SftpItem } from '../types';
 import { SessionTreePanel } from './SessionTreePanel';
@@ -111,13 +111,13 @@ export function SidebarShell(props: SidebarShellProps) {
           <div className="rail-logo" title="Termio">
             <img src={appIcon} alt="Termio" draggable={false} />
           </div>
-          <Tooltip title="会话" placement="right"><Button aria-label="会话" className={sidebarTab === 'sessions' ? 'is-active' : ''} type="text" icon={<CloudServerOutlined />} onClick={() => selectSidebarTab('sessions')} /></Tooltip>
-          <Tooltip title="SFTP 文件" placement="right"><Button aria-label="SFTP 文件" className={sidebarTab === 'sftp' ? 'is-active' : ''} type="text" icon={<FolderOpenOutlined />} onClick={() => selectSidebarTab('sftp')} /></Tooltip>
-          <Tooltip title="系统状态" placement="right"><Button aria-label="系统状态" className={sidebarTab === 'status' ? 'is-active' : ''} type="text" icon={<SlidersOutlined />} onClick={() => selectSidebarTab('status')} /></Tooltip>
+          <Button aria-label="会话" className={sidebarTab === 'sessions' ? 'is-active' : ''} type="text" icon={<CloudServerOutlined />} onClick={() => selectSidebarTab('sessions')} />
+          <Button aria-label="SFTP 文件" className={sidebarTab === 'sftp' ? 'is-active' : ''} type="text" icon={<FolderOpenOutlined />} onClick={() => selectSidebarTab('sftp')} />
+          <Button aria-label="系统状态" className={sidebarTab === 'status' ? 'is-active' : ''} type="text" icon={<SlidersOutlined />} onClick={() => selectSidebarTab('status')} />
         </div>
         <div className="activity-rail-footer">
-          <Tooltip title={sidebarVisible ? '收起侧栏' : '展开侧栏'} placement="right"><Button aria-label={sidebarVisible ? '收起侧栏' : '展开侧栏'} type="text" icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={onToggleSidebar} /></Tooltip>
-          <Tooltip title="设置" placement="right"><Button aria-label="设置" type="text" icon={<SettingOutlined />} onClick={onOpenSettings} /></Tooltip>
+          <Button aria-label={sidebarVisible ? '收起侧栏' : '展开侧栏'} type="text" icon={sidebarVisible ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={onToggleSidebar} />
+          <Button aria-label="设置" type="text" icon={<SettingOutlined />} onClick={onOpenSettings} />
         </div>
       </nav>
       {sidebarVisible && <div className="sidebar-panel">

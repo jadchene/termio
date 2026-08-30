@@ -35,3 +35,14 @@ test('terminal write queue bounds renderer backlog and keeps newest output', () 
   assert.match(output, /积压/);
   assert.equal(output.endsWith('ABCDEFGH'), true);
 });
+
+test('terminal write queue preserves astral Unicode at truncation and chunk boundaries', () => {
+  const truncated = new TerminalWriteQueue(4);
+  truncated.append('12😀3');
+  assert.equal(truncated.take(1024).endsWith('😀3'), true);
+
+  const chunked = new TerminalWriteQueue();
+  chunked.append('A😀B');
+  assert.equal(chunked.take(2), 'A😀');
+  assert.equal(chunked.take(1), 'B');
+});
