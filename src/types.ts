@@ -176,7 +176,7 @@ export type SftpTransferError = {
 export type TreeContextMenu =
   | { x: number; y: number; type: 'session'; id: number; name: string }
   | { x: number; y: number; type: 'folder'; id: number; name: string }
-  | { x: number; y: number; type: 'sftp'; sessionId: number; path: string; name: string; isDir: boolean };
+  | { x: number; y: number; type: 'sftp'; sessionId: number; path: string; name: string; isDir: boolean; downloadPaths: string[] };
 
 declare global {
   interface Window {

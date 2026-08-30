@@ -3,6 +3,7 @@ import type { Session, Settings, SftpItem, TreeContextMenu } from '../types';
 import { getParentSftpPath } from '../utils/sftpPath';
 import { formatSftpError, isSilentSftpError } from '../utils/sftpError';
 import { shouldApplyCwdCalibration } from '../utils/sftpCwd';
+import { resolveSftpContextTargets } from '../utils/sftpSelection';
 
 type SftpMenuPayload = Extract<TreeContextMenu, { type: 'sftp' }>;
 
@@ -256,6 +257,11 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
     if (!activeSession || !activeSessionId) return;
     e.preventDefault();
     e.stopPropagation();
+    const downloadPaths = resolveSftpContextTargets(payload.path, selectedSftpPaths);
+    if (!selectedSftpPaths.includes(payload.path)) {
+      clearSftpSelectionNow();
+      setSftpSelection(payload.path, true);
+    }
     setTreeMenu({
       x: e.clientX,
       y: e.clientY,
@@ -264,6 +270,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
       path: payload.path,
       name: payload.name,
       isDir: payload.isDir,
+      downloadPaths,
     });
   };
 
@@ -271,7 +278,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
     setTreeMenu(null);
     clearSftpSelectionNow();
     await runSftpAction(async () => {
-      await window.terminalApi.sftpDownloadBatch({ sessionId: menu.sessionId, remotePaths: [menu.path] });
+      await window.terminalApi.sftpDownloadBatch({ sessionId: menu.sessionId, remotePaths: menu.downloadPaths });
     });
   };
 

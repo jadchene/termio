@@ -56,7 +56,9 @@ export function TreeContextMenu(props: TreeContextMenuProps) {
         </>
       ) : (
         <>
-          <button role="menuitem" autoFocus onClick={() => void onDownloadSftp(menu)}>下载</button>
+          <button role="menuitem" autoFocus onClick={() => void onDownloadSftp(menu)}>
+            {menu.downloadPaths.length > 1 ? `下载所选 ${menu.downloadPaths.length} 项` : '下载'}
+          </button>
           <button role="menuitem" onClick={() => void onRenameSftp(menu)}>重命名</button>
           <button role="menuitem" className="danger" onClick={() => void onDeleteSftp(menu)}>
             删除
