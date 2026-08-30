@@ -15,7 +15,6 @@ export type TerminalResourceMaps = {
   pendingWrite: Map<number, any>;
   pendingInput: Map<number, any>;
   pendingResize?: Map<number, any>;
-  lastResize?: Map<number, any>;
   pausedByScroll: Map<number, any>;
   autoCopySelection: Map<number, any>;
   disconnected: Map<number, any>;
@@ -46,7 +45,6 @@ export function disposeTerminalResources(
     resources.pendingWrite,
     resources.pendingInput,
     resources.pendingResize,
-    resources.lastResize,
     resources.writeInFlight,
     resources.pausedByScroll,
     resources.autoCopySelection,

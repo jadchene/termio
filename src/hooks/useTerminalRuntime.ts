@@ -39,7 +39,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   const scheduleTerminalWriteRef = useRef<(sessionId: number) => void>(() => undefined);
   const pauseSyncFrameRef = useRef<Map<number, number>>(new Map());
   const pendingResizeRef = useRef<Map<number, { cols: number; rows: number }>>(new Map());
-  const lastResizeRef = useRef<Map<number, { cols: number; rows: number }>>(new Map());
   const resizeFrameRef = useRef<Map<number, number>>(new Map());
   const pendingInputRef = useRef<Map<number, string>>(new Map());
   const pendingInputTimerRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -169,9 +168,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       const next = pendingResizeRef.current.get(sessionId);
       pendingResizeRef.current.delete(sessionId);
       if (!next) return;
-      const previous = lastResizeRef.current.get(sessionId);
-      if (previous?.cols === next.cols && previous.rows === next.rows) return;
-      lastResizeRef.current.set(sessionId, next);
       void resizePty({ sessionId, ...next }).catch(() => null);
     });
     resizeFrameRef.current.set(sessionId, frame);
@@ -206,7 +202,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       pendingWrite: pendingWriteRef.current,
       pendingInput: pendingInputRef.current,
       pendingResize: pendingResizeRef.current,
-      lastResize: lastResizeRef.current,
       pausedByScroll: pausedByScrollRef.current,
       autoCopySelection: autoCopySelectionRef.current,
       disconnected: disconnectedByTabRef.current,
@@ -366,6 +361,8 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     term.options.theme = getTerminalTheme(localSettings.theme.mode);
 
     mountTerminal(terminalContainerRef.current, term);
+    runFitTerminal(sessionId);
+    queueResize(sessionId, term.cols, term.rows);
     fitTerminalStabilized(sessionId);
     focusTerminalInput(sessionId, !!localSettings.behavior.autoSwitchEnglishInputMethod);
     const paused = !isAtBottom(term);
@@ -376,6 +373,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     fitTerminalStabilized,
     isAtBottom,
     queueResize,
+    runFitTerminal,
     setPausedByScroll,
     schedulePauseStateSync,
     queueInput,
