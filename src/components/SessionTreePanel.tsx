@@ -11,7 +11,7 @@ type SessionTreePanelProps = {
   onToggleFolder: (folderId: number) => void;
   onOpenSessionMenu: (e: MouseEvent, session: Session) => void;
   onOpenFolderMenu: (e: MouseEvent, folder: Folder) => void;
-  onOpenSession: (session: Session) => void;
+  onOpenSession: (session: Session, forceNew?: boolean) => void;
   onCreateFolder: () => void;
   onCreateSession: () => void;
 };
@@ -79,9 +79,12 @@ export const SessionTreePanel = (props: SessionTreePanelProps) => {
         <div key={session.id} className="session-node" onContextMenu={(e) => onOpenSessionMenu(e, session)}>
           <button
             className="link-btn tree-row-btn"
-            title={`${session.name} — ${session.username}@${session.host}:${session.port}`}
+            title={`${session.name} — ${session.username}@${session.host}:${session.port}（双击打开）`}
             onContextMenu={(e) => onOpenSessionMenu(e, session)}
-            onClick={() => onOpenSession(session)}
+            onClick={(event) => {
+              if (event.detail === 0) onOpenSession(session);
+            }}
+            onDoubleClick={() => onOpenSession(session, true)}
           >
             <TerminalIcon />
             <span className="session-tree-name">{session.name}</span>

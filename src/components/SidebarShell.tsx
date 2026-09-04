@@ -139,8 +139,8 @@ export function SidebarShell(props: SidebarShellProps) {
           }}
           onOpenSessionMenu={sessionTreeActions.onOpenSessionMenu}
           onOpenFolderMenu={sessionTreeActions.onOpenFolderMenu}
-          onOpenSession={(session) => {
-            void connectSession(session);
+          onOpenSession={(session, forceNew) => {
+            void connectSession(session, forceNew);
           }}
           onCreateFolder={sessionTreeActions.onCreateFolder}
           onCreateSession={sessionTreeActions.onCreateSession}
