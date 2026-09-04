@@ -1,6 +1,6 @@
 type MetricsCommandOptions = {
   includeStatic: boolean;
-  includeSlow: boolean;
+  includeFileSystem: boolean;
   includeNetwork: boolean;
 };
 
@@ -10,6 +10,12 @@ const realtimeCommands = [
   'echo "__NET__"; (cat /proc/net/dev 2>/dev/null || true)',
   'echo "__DISK__"; (cat /proc/diskstats 2>/dev/null || true)',
   'echo "__UPTIME__"; (cut -d" " -f1 /proc/uptime 2>/dev/null || true)',
+  'echo "__CLOCK_TICKS__"; (getconf CLK_TCK 2>/dev/null || echo 100)',
+  'echo "__CPUFREQ__"; (cat /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq 2>/dev/null || grep "^cpu MHz" /proc/cpuinfo 2>/dev/null | cut -d: -f2 || true)',
+  'echo "__CPUTEMP__"; (for d in /sys/class/hwmon/hwmon*; do [ -d "$d" ] || continue; n=$(cat "$d/name" 2>/dev/null || echo ""); echo "NAME:$n"; for f in "$d"/temp*_input; do [ -f "$f" ] || continue; b="${f%_input}"; l=$(cat "${b}_label" 2>/dev/null || echo ""); echo "T:$l:$(cat "$f" 2>/dev/null || echo 0)"; done; done)',
+  'echo "__GPU__"; (command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.graphics --format=csv,noheader,nounits || true)',
+  'echo "__PROCESS_INFO__"; (command -v ps >/dev/null 2>&1 && LANG=C LC_ALL=C ps -eo pid=,rss=,comm= 2>/dev/null || true)',
+  'echo "__PROCESS_CPU__"; (for stat in /proc/[0-9]*/stat; do [ -r "$stat" ] && cat "$stat"; done 2>/dev/null || true)',
 ];
 
 const networkCommands = [
@@ -19,13 +25,8 @@ const networkCommands = [
   'echo "__GPUINFO__"; (command -v nvidia-smi >/dev/null 2>&1 && LANG=C LC_ALL=C nvidia-smi 2>/dev/null | sed -n "1,3p" || true)',
 ];
 
-const slowCommands = [
+const fileSystemCommands = [
   'echo "__FS__"; (df -B1 -P -x tmpfs -x devtmpfs -x overlay -x squashfs 2>/dev/null || true)',
-  'echo "__CPUFREQ__"; (cat /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq 2>/dev/null || grep "^cpu MHz" /proc/cpuinfo 2>/dev/null | cut -d: -f2 || true)',
-  'echo "__CPUTEMP__"; (for d in /sys/class/hwmon/hwmon*; do [ -d "$d" ] || continue; n=$(cat "$d/name" 2>/dev/null || echo ""); echo "NAME:$n"; for f in "$d"/temp*_input; do [ -f "$f" ] || continue; b="${f%_input}"; l=$(cat "${b}_label" 2>/dev/null || echo ""); echo "T:$l:$(cat "$f" 2>/dev/null || echo 0)"; done; done)',
-  'echo "__GPU__"; (command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.graphics --format=csv,noheader,nounits || true)',
-  'echo "__PROCESSES_CPU__"; (command -v ps >/dev/null 2>&1 && LANG=C LC_ALL=C ps -eo pid=,%cpu=,rss=,comm= --sort=-%cpu 2>/dev/null | head -n 10 || true)',
-  'echo "__PROCESSES_MEMORY__"; (command -v ps >/dev/null 2>&1 && LANG=C LC_ALL=C ps -eo pid=,%cpu=,rss=,comm= --sort=-rss 2>/dev/null | head -n 10 || true)',
 ];
 
 const staticCommands = [
@@ -36,9 +37,9 @@ const staticCommands = [
   'echo "__SYS__"; (sh -c \'if [ -f /etc/os-release ]; then . /etc/os-release; echo "${PRETTY_NAME:-${NAME:-}}"; else echo ""; fi; uname -m 2>/dev/null; uname -r 2>/dev/null\' || true)',
 ];
 
-export const buildMetricsCommand = ({ includeStatic, includeSlow, includeNetwork }: MetricsCommandOptions): string => [
+export const buildMetricsCommand = ({ includeStatic, includeFileSystem, includeNetwork }: MetricsCommandOptions): string => [
   ...realtimeCommands,
   ...(includeNetwork ? networkCommands : []),
-  ...(includeSlow ? slowCommands : []),
+  ...(includeFileSystem ? fileSystemCommands : []),
   ...(includeStatic ? staticCommands : []),
 ].join('; ');

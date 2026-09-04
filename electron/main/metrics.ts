@@ -4,7 +4,7 @@ import {
   remoteMetricsSnapshotMap,
   remoteMetricsPayloadMap,
   METRICS_NETWORK_SAMPLE_INTERVAL_MS,
-  METRICS_SLOW_SAMPLE_INTERVAL_MS,
+  METRICS_FILE_SYSTEM_SAMPLE_INTERVAL_MS,
   sharedState,
 } from './state';
 import { safeSend } from './window';
@@ -20,7 +20,8 @@ import {
   parseMem,
   parseNetworkRoute,
   parseProcesses,
-  normalizeProcessCpuPercent,
+  parseProcessCpuTicks,
+  calculateProcessCpuPercent,
   parseSystemInfo,
   parseUptimeSeconds,
 } from './metricsParsers';
@@ -28,7 +29,7 @@ import { buildMetricsCommand } from './metricsCommand';
 
 export { parseCpu, parseMem } from './metricsParsers';
 
-let lastSlowSampleAt = 0;
+let lastFileSystemSampleAt = 0;
 let lastNetworkSampleAt = 0;
 let metricsSequence = 0;
 let immediateCollectionPending = false;
@@ -82,16 +83,17 @@ const collectAndSendMetrics = async (queueIfBusy = false): Promise<boolean> => {
     const now = Date.now();
     sampledSessionId = sharedState.metricsSessionId;
     const hasCachedPayload = remoteMetricsPayloadMap.has(sampledSessionId);
-    const includeSlowSample = !hasCachedPayload || now - lastSlowSampleAt >= METRICS_SLOW_SAMPLE_INTERVAL_MS;
+    const includeFileSystemSample = !hasCachedPayload
+      || now - lastFileSystemSampleAt >= METRICS_FILE_SYSTEM_SAMPLE_INTERVAL_MS;
     const includeNetworkSample = !hasCachedPayload
       || now - lastNetworkSampleAt >= METRICS_NETWORK_SAMPLE_INTERVAL_MS;
     const payload = await collectRemoteMetrics(
       sampledSessionId,
-      { includeSlowSample, includeNetworkSample },
+      { includeFileSystemSample, includeNetworkSample },
       ++metricsSequence,
     );
     safeSend('system:metrics', payload);
-    if (includeSlowSample) lastSlowSampleAt = now;
+    if (includeFileSystemSample) lastFileSystemSampleAt = now;
     if (includeNetworkSample) lastNetworkSampleAt = now;
     sharedState.metricsInactiveSent = false;
     return true;
@@ -391,22 +393,22 @@ export function execOnSession(
 
 export async function collectRemoteMetrics(
   sessionId: number,
-  options: { includeSlowSample?: boolean; includeNetworkSample?: boolean } = {},
+  options: { includeFileSystemSample?: boolean; includeNetworkSample?: boolean } = {},
   sequence = 0,
 ): Promise<RemoteMetricsPayload> {
   const cachedPayload = remoteMetricsPayloadMap.get(sessionId);
   const shouldSampleStatic = !cachedPayload;
-  const shouldSampleSlow = !!options.includeSlowSample || shouldSampleStatic;
+  const shouldSampleFileSystem = !!options.includeFileSystemSample || shouldSampleStatic;
   const shouldSampleNetwork = !!options.includeNetworkSample || shouldSampleStatic;
   const script = buildMetricsCommand({
     includeStatic: shouldSampleStatic,
-    includeSlow: shouldSampleSlow,
+    includeFileSystem: shouldSampleFileSystem,
     includeNetwork: shouldSampleNetwork,
   });
 
   const output = await execOnSession(sessionId, script, {
     timeoutMs: 5000,
-    maxOutputBytes: shouldSampleStatic || shouldSampleSlow ? 1024 * 1024 : 256 * 1024,
+    maxOutputBytes: 1024 * 1024,
   });
   const lines = output.split(/\r?\n/);
   const section: Record<string, string[]> = {
@@ -428,8 +430,9 @@ export async function collectRemoteMetrics(
     GPUINFO: [],
     GPU: [],
     UPTIME: [],
-    PROCESSES_CPU: [],
-    PROCESSES_MEMORY: [],
+    CLOCK_TICKS: [],
+    PROCESS_INFO: [],
+    PROCESS_CPU: [],
   };
   let current: keyof typeof section | null = null;
   for (const line of lines) {
@@ -451,8 +454,9 @@ export async function collectRemoteMetrics(
     else if (line === '__GPUINFO__') current = 'GPUINFO';
     else if (line === '__GPU__') current = 'GPU';
     else if (line === '__UPTIME__') current = 'UPTIME';
-    else if (line === '__PROCESSES_CPU__') current = 'PROCESSES_CPU';
-    else if (line === '__PROCESSES_MEMORY__') current = 'PROCESSES_MEMORY';
+    else if (line === '__CLOCK_TICKS__') current = 'CLOCK_TICKS';
+    else if (line === '__PROCESS_INFO__') current = 'PROCESS_INFO';
+    else if (line === '__PROCESS_CPU__') current = 'PROCESS_CPU';
     else if (current) section[current].push(line);
   }
 
@@ -476,6 +480,8 @@ export async function collectRemoteMetrics(
   const diskStat = parseDisk(section.DISK);
   const fsUsage = parseFsUsage(section.FS);
   const parsedBlockDevices = parseBlockDevices(section.BLOCKDEV);
+  const processCpuTicks = parseProcessCpuTicks(section.PROCESS_CPU);
+  const clockTicksPerSecond = Number(section.CLOCK_TICKS[0]) || 100;
 
   const now = Date.now();
   const prev = remoteMetricsSnapshotMap.get(sessionId);
@@ -499,6 +505,7 @@ export async function collectRemoteMetrics(
   remoteMetricsSnapshotMap.set(sessionId, {
     cpuTotal: cpuStat.total,
     cpuIdle: cpuStat.idle,
+    processCpuTicks,
     netRx: netStat.rx,
     netTx: netStat.tx,
     diskReadBytes: diskStat.readBytes,
@@ -556,12 +563,22 @@ export async function collectRemoteMetrics(
     driverVersion: gpuDriverInfo.driverVersion || cachedPayload?.gpu.driverVersion || '',
     cudaVersion: gpuDriverInfo.cudaVersion || cachedPayload?.gpu.cudaVersion || '',
   } as RemoteMetricsPayload['gpu']);
-  const processes = section.PROCESSES_CPU.length > 0 || section.PROCESSES_MEMORY.length > 0
-    ? parseProcesses(section.PROCESSES_CPU, section.PROCESSES_MEMORY).map((process) => ({
+  const sampledProcesses = section.PROCESS_INFO.length > 0
+    ? parseProcesses(section.PROCESS_INFO).map((process) => ({
         ...process,
-        cpuPercent: normalizeProcessCpuPercent(process.cpuPercent, cpuLogicalCores),
+        cpuPercent: calculateProcessCpuPercent(
+          processCpuTicks.get(process.pid) || 0,
+          prev?.processCpuTicks.get(process.pid),
+          now - (prev?.at || now),
+          clockTicksPerSecond,
+          cpuLogicalCores,
+        ),
       }))
     : (cachedPayload?.processes || []);
+  const processes = Array.from(new Map([
+    ...[...sampledProcesses].sort((left, right) => right.cpuPercent - left.cpuPercent).slice(0, 10),
+    ...[...sampledProcesses].sort((left, right) => right.memoryBytes - left.memoryBytes).slice(0, 10),
+  ].map((process) => [process.pid, process])).values());
 
   const payload: RemoteMetricsPayload = {
     sessionId,

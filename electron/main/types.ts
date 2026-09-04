@@ -79,6 +79,7 @@ export type SftpProgressThrottleState = {
 export type RemoteMetricsSnapshot = {
   cpuTotal: number;
   cpuIdle: number;
+  processCpuTicks: Map<number, number>;
   netRx: number;
   netTx: number;
   diskReadBytes: number;

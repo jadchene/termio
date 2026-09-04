@@ -28,7 +28,7 @@ export const remoteMetricsSnapshotMap = new Map<number, RemoteMetricsSnapshot>()
 
 export const remoteMetricsPayloadMap = new Map<number, RemoteMetricsPayload>();
 
-export const METRICS_SLOW_SAMPLE_INTERVAL_MS = 5000;
+export const METRICS_FILE_SYSTEM_SAMPLE_INTERVAL_MS = 5000;
 export const METRICS_NETWORK_SAMPLE_INTERVAL_MS = 30000;
 
 export const sharedState = {

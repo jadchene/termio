@@ -1,6 +1,6 @@
 {
   "name": "termio",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Local Electron SSH terminal with SFTP file management and remote system metrics.",
   "main": "dist-electron/electron/main.js",
   "scripts": {

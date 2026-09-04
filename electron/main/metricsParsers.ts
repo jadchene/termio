@@ -114,32 +114,52 @@ export function parseBlockDevices(lines: string[]): {
   return { ssdCount, ssdBytes, hddCount, hddBytes };
 }
 
-export function parseProcesses(cpuLines: string[], memoryLines: string[]): Array<{
-  pid: number;
-  name: string;
-  cpuPercent: number;
-  memoryBytes: number;
-}> {
-  const processes = new Map<number, { pid: number; name: string; cpuPercent: number; memoryBytes: number }>();
-  for (const line of [...cpuLines, ...memoryLines]) {
-    const matched = String(line || '').trim().match(/^(\d+)\s+([0-9.]+)\s+([0-9.]+)\s+(.+)$/);
+export function parseProcessCpuTicks(lines: string[]): Map<number, number> {
+  const result = new Map<number, number>();
+  for (const line of lines) {
+    const matched = String(line || '').trim().match(/^(\d+)\s+\(.*\)\s+\S\s+(.+)$/);
     if (!matched) continue;
+    const fields = matched[2].trim().split(/\s+/);
     const pid = Number(matched[1]) || 0;
-    const name = matched[4]?.trim() || '';
-    if (!pid || !name) continue;
-    processes.set(pid, {
-      pid,
-      name,
-      cpuPercent: Number(matched[2]) || 0,
-      memoryBytes: (Number(matched[3]) || 0) * 1024,
-    });
+    const ticks = (Number(fields[10]) || 0) + (Number(fields[11]) || 0);
+    if (pid > 0) result.set(pid, ticks);
   }
-  return Array.from(processes.values());
+  return result;
 }
 
-export function normalizeProcessCpuPercent(cpuPercent: number, logicalCores: number): number {
-  const normalized = Math.max(cpuPercent, 0) / Math.max(logicalCores, 1);
-  return Math.round((Math.min(normalized, 100) + 1e-9) * 10) / 10;
+export function parseProcesses(lines: string[]): Array<{
+  pid: number;
+  name: string;
+  memoryBytes: number;
+}> {
+  const processes = [];
+  for (const line of lines) {
+    const matched = String(line || '').trim().match(/^(\d+)\s+([0-9.]+)\s+(.+)$/);
+    if (!matched) continue;
+    const pid = Number(matched[1]) || 0;
+    const name = matched[3]?.trim() || '';
+    if (!pid || !name) continue;
+    processes.push({
+      pid,
+      name,
+      memoryBytes: (Number(matched[2]) || 0) * 1024,
+    });
+  }
+  return processes;
+}
+
+export function calculateProcessCpuPercent(
+  currentTicks: number,
+  previousTicks: number | undefined,
+  elapsedMs: number,
+  clockTicksPerSecond: number,
+  logicalCores: number,
+): number {
+  if (previousTicks == null || currentTicks < previousTicks || elapsedMs <= 0 || clockTicksPerSecond <= 0) return 0;
+  const intervalSeconds = elapsedMs / 1000;
+  const rawPercent = ((currentTicks - previousTicks) / clockTicksPerSecond / intervalSeconds) * 100;
+  const percent = logicalCores > 0 ? rawPercent / logicalCores : rawPercent;
+  return Math.round((Math.max(percent, 0) + 1e-9) * 10) / 10;
 }
 
 export function parseSystemInfo(lines: string[]): {

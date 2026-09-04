@@ -13,7 +13,8 @@ import {
   parseMem,
   parseNetworkRoute,
   parseProcesses,
-  normalizeProcessCpuPercent,
+  parseProcessCpuTicks,
+  calculateProcessCpuPercent,
   parseSystemInfo,
   parseUptimeSeconds,
 } from '../electron/main/metricsParsers';
@@ -84,21 +85,24 @@ test('GPU parser reads the current graphics clock for each device', () => {
   assert.equal(parsed.items[1]?.clockMhz, null);
 });
 
-test('process parser merges CPU and memory top lists by PID', () => {
-  assert.deepEqual(parseProcesses(
-    ['101 82.5 1.2 node', '202 40.0 3.4 java'],
-    ['303 2.0 28.5 postgres', '101 81.0 1.2 node'],
-  ), [
-    { pid: 101, name: 'node', cpuPercent: 81, memoryBytes: 1.2 * 1024 },
-    { pid: 202, name: 'java', cpuPercent: 40, memoryBytes: 3.4 * 1024 },
-    { pid: 303, name: 'postgres', cpuPercent: 2, memoryBytes: 28.5 * 1024 },
+test('process parsers read current CPU ticks and resident memory', () => {
+  assert.deepEqual(parseProcesses(['101 1200 node', '202 3400 java']), [
+    { pid: 101, name: 'node', memoryBytes: 1200 * 1024 },
+    { pid: 202, name: 'java', memoryBytes: 3400 * 1024 },
   ]);
+  const ticks = parseProcessCpuTicks([
+    '101 (node worker) S 1 2 3 4 5 6 7 8 9 10 80 20 13 14',
+    'invalid',
+  ]);
+  assert.equal(ticks.get(101), 100);
 });
 
-test('process CPU usage is normalized to total host capacity', () => {
-  assert.equal(normalizeProcessCpuPercent(240, 8), 30);
-  assert.equal(normalizeProcessCpuPercent(1200, 8), 100);
-  assert.equal(normalizeProcessCpuPercent(35.55, 1), 35.6);
+test('process CPU usage uses whole-host percentage with a raw fallback when core count is unavailable', () => {
+  assert.equal(calculateProcessCpuPercent(240, 140, 1000, 100, 8), 12.5);
+  assert.equal(calculateProcessCpuPercent(340, 140, 1000, 100, 8), 25);
+  assert.equal(calculateProcessCpuPercent(240, 140, 1000, 100, 0), 100);
+  assert.equal(calculateProcessCpuPercent(240, undefined, 1000, 100, 8), 0);
+  assert.equal(calculateProcessCpuPercent(100, 120, 1000, 100, 8), 0);
 });
 
 test('NVIDIA-SMI header parser reads shared driver and CUDA versions', () => {
@@ -123,17 +127,17 @@ test('system parser reads kernel version and uptime', () => {
 });
 
 test('metrics command samples static host information only when requested', () => {
-  const realtime = buildMetricsCommand({ includeStatic: false, includeSlow: false, includeNetwork: false });
-  assert.doesNotMatch(realtime, /__CPUINFO__|__SYS__|__GPUINFO__|__CPUTEMP__|__GPU__/);
-  assert.match(realtime, /__CPU__|__MEM__|__NET__|__DISK__|__UPTIME__/);
+  const realtime = buildMetricsCommand({ includeStatic: false, includeFileSystem: false, includeNetwork: false });
+  assert.doesNotMatch(realtime, /__CPUINFO__|__SYS__|__GPUINFO__|__FS__/);
+  assert.match(realtime, /__CPU__|__MEM__|__NET__|__DISK__|__UPTIME__|__CLOCK_TICKS__|__CPUFREQ__|__CPUTEMP__|__GPU__|__PROCESS_INFO__|__PROCESS_CPU__/);
 
-  const slow = buildMetricsCommand({ includeStatic: false, includeSlow: true, includeNetwork: false });
-  assert.match(slow, /__CPUFREQ__|__CPUTEMP__|__FS__|__GPU__|__PROCESSES_CPU__|__PROCESSES_MEMORY__/);
-  assert.doesNotMatch(slow, /__CPUINFO__|__SYS__|__GPUINFO__/);
+  const fileSystem = buildMetricsCommand({ includeStatic: false, includeFileSystem: true, includeNetwork: false });
+  assert.match(fileSystem, /__FS__/);
+  assert.doesNotMatch(fileSystem, /__CPUINFO__|__SYS__|__GPUINFO__/);
 
-  const network = buildMetricsCommand({ includeStatic: false, includeSlow: false, includeNetwork: true });
+  const network = buildMetricsCommand({ includeStatic: false, includeFileSystem: false, includeNetwork: true });
   assert.match(network, /__NETROUTE__|__IP__|__DNS__|__GPUINFO__/);
 
-  const initial = buildMetricsCommand({ includeStatic: true, includeSlow: true, includeNetwork: true });
+  const initial = buildMetricsCommand({ includeStatic: true, includeFileSystem: true, includeNetwork: true });
   assert.match(initial, /__BLOCKDEV__|__CPUINFO__|__CPUFREQMAX__|__SYS__|__GPUINFO__/);
 });
