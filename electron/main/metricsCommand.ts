@@ -14,7 +14,7 @@ const realtimeCommands = [
   'echo "__CPUFREQ__"; (cat /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq 2>/dev/null || grep "^cpu MHz" /proc/cpuinfo 2>/dev/null | cut -d: -f2 || true)',
   'echo "__CPUTEMP__"; (for d in /sys/class/hwmon/hwmon*; do [ -d "$d" ] || continue; n=$(cat "$d/name" 2>/dev/null || echo ""); echo "NAME:$n"; for f in "$d"/temp*_input; do [ -f "$f" ] || continue; b="${f%_input}"; l=$(cat "${b}_label" 2>/dev/null || echo ""); echo "T:$l:$(cat "$f" 2>/dev/null || echo 0)"; done; done)',
   'echo "__GPU__"; (command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,clocks.current.graphics --format=csv,noheader,nounits || true)',
-  'echo "__PROCESS_INFO__"; (command -v ps >/dev/null 2>&1 && LANG=C LC_ALL=C ps -eo pid=,rss=,comm= 2>/dev/null || true)',
+  'echo "__PROCESS_INFO__"; (process_info=$(command -v ps >/dev/null 2>&1 && LANG=C LC_ALL=C ps -e -o pid= -o rss= -o comm= 2>/dev/null || true); if [ -n "$process_info" ]; then printf "%s\\n" "$process_info"; else set -- /proc/[0-9]*/status; set -f; for status do [ -r "$status" ] || continue; pid=${status#/proc/}; pid=${pid%/status}; name=""; rss=0; while IFS=: read -r key value; do case "$key" in Name) set -- $value; name="$*" ;; VmRSS) set -- $value; rss="${1:-0}" ;; esac; done < "$status"; [ -n "$name" ] && printf "%s %s %s\\n" "$pid" "$rss" "$name"; done; fi)',
   'echo "__PROCESS_CPU__"; (for stat in /proc/[0-9]*/stat; do [ -r "$stat" ] && cat "$stat"; done 2>/dev/null || true)',
 ];
 

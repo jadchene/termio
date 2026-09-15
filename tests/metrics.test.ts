@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { CappedMetricsOutput } from '../electron/main/metricsOutput';
 import { buildMetricsCommand } from '../electron/main/metricsCommand';
 import {
@@ -86,8 +90,8 @@ test('GPU parser reads the current graphics clock for each device', () => {
 });
 
 test('process parsers read current CPU ticks and resident memory', () => {
-  assert.deepEqual(parseProcesses(['101 1200 node', '202 3400 java']), [
-    { pid: 101, name: 'node', memoryBytes: 1200 * 1024 },
+  assert.deepEqual(parseProcesses(['101 1200 node worker', '202 3400 java']), [
+    { pid: 101, name: 'node worker', memoryBytes: 1200 * 1024 },
     { pid: 202, name: 'java', memoryBytes: 3400 * 1024 },
   ]);
   const ticks = parseProcessCpuTicks([
@@ -128,6 +132,8 @@ test('system parser reads kernel version and uptime', () => {
 
 test('metrics command samples static host information only when requested', () => {
   const realtime = buildMetricsCommand({ includeStatic: false, includeFileSystem: false, includeNetwork: false });
+  // CentOS 7 将逗号串联的空标题格式当成一个 PID 列，必须分别指定列。
+  assert.match(realtime, /ps -e -o pid= -o rss= -o comm=/);
   assert.doesNotMatch(realtime, /__CPUINFO__|__SYS__|__GPUINFO__|__FS__/);
   assert.match(realtime, /__CPU__|__MEM__|__NET__|__DISK__|__UPTIME__|__CLOCK_TICKS__|__CPUFREQ__|__CPUTEMP__|__GPU__|__PROCESS_INFO__|__PROCESS_CPU__/);
 
@@ -140,4 +146,24 @@ test('metrics command samples static host information only when requested', () =
 
   const initial = buildMetricsCommand({ includeStatic: true, includeFileSystem: true, includeNetwork: true });
   assert.match(initial, /__BLOCKDEV__|__CPUINFO__|__CPUFREQMAX__|__SYS__|__GPUINFO__/);
+});
+
+test('process fallback executes in a shell when ps fails', { skip: process.platform === 'win32' && !process.env.TERMIO_TEST_SHELL }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'termio-process-test-'));
+  try {
+    for (const [pid, name, rss] of [[101, 'worker * name', 1200], [202, 'java', 3400]] as const) {
+      mkdirSync(path.join(root, String(pid)));
+      writeFileSync(path.join(root, String(pid), 'status'), `Name:\t${name}\nVmRSS:\t${rss} kB\n`);
+    }
+    const command = buildMetricsCommand({ includeStatic: false, includeFileSystem: false, includeNetwork: false });
+    const fragment = command.slice(command.indexOf('echo "__PROCESS_INFO__"'), command.indexOf('; echo "__PROCESS_CPU__"'));
+    const result = spawnSync(process.env.TERMIO_TEST_SHELL || 'sh', ['-c', 'ps() { return 1; }; ' + fragment.replaceAll('/proc/', root.replaceAll('\\', '/') + '/')], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || String(result.error));
+    assert.deepEqual(parseProcesses(result.stdout.split(/\r?\n/)), [
+      { pid: 101, name: 'worker * name', memoryBytes: 1200 * 1024 },
+      { pid: 202, name: 'java', memoryBytes: 3400 * 1024 },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
