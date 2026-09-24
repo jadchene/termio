@@ -3,12 +3,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SftpBatchControl } from './types';
-import { sftpBatchControlMap, sftpProgressThrottleMap } from './state';
+import { sftpBatchControlMap, sftpProgressThrottleMap, DEFAULT_TRANSFER_CONCURRENCY } from './state';
 import { getSessionForConnection, requireConnected } from './session';
 import {
   buildRemotePath,
   createBatchId,
   createStandaloneSftp,
+  createWorkerSftpClients,
+  runWithConcurrency,
   emitSftpBatchError,
   emitSftpProgressMaybe,
   resolveRemotePath,
@@ -45,16 +47,18 @@ type NativeDragState = {
   finalized: boolean;
   tempRoot: string;
   entries: NativeDragEntry[];
-  localPaths?: string[];
-  directoryRoots?: RendererDragItem[];
-  directoryRootNames?: Map<string, string>;
-  localPreparationStarted: boolean;
+  roots: RendererDragItem[];
+  rootNames: Map<string, string>;
+  manifestPreparationStarted: boolean;
+  downloadsStarted: boolean;
+  stopped: boolean;
   child?: ChildProcessWithoutNullStreams;
   client?: any;
   batchId: string;
   control?: SftpBatchControl;
   transferChain: Promise<void>;
   requestedIndexes: Set<number>;
+  completedItems: Map<number, string>;
   successCount: number;
   failedCount: number;
   helperError: string;
@@ -126,7 +130,7 @@ async function collectDirectoryEntries(
   entries: NativeDragEntry[],
   state: NativeDragState,
 ): Promise<void> {
-  if (state.cancelled) throw new Error('拖拽已取消');
+  if (state.cancelled || state.stopped || state.control?.cancelled) throw new Error('拖拽已取消');
   appendEntry(entries, {
     name: ensureDescriptorPath(descriptorDir),
     remotePath: remoteDir,
@@ -183,6 +187,10 @@ async function getTransferClient(state: NativeDragState): Promise<any> {
   requireConnected(state.sessionId);
   const session = await getSessionForConnection(state.sessionId);
   const client = await createStandaloneSftp(session);
+  if (state.cancelled || state.stopped || state.control?.cancelled) {
+    await client.end().catch(() => undefined);
+    throw new Error('拖拽下载已取消');
+  }
   state.client = client;
   if (state.control) state.control.client = client;
   return client;
@@ -195,31 +203,28 @@ function beginTransferBatch(state: NativeDragState): SftpBatchControl {
     connectionId: state.sessionId,
     cancelled: false,
     ownsClient: true,
+    onCancel: () => {
+      state.cancelled = true;
+      sendHelperLine(state, 'CANCEL');
+    },
   };
   state.control = control;
   sftpBatchControlMap.set(state.batchId, control);
   return control;
 }
 
-async function transferRequestedItem(state: NativeDragState, itemIndex: number): Promise<void> {
-  const item = state.entries[itemIndex];
+async function transferRequestedItem(state: NativeDragState, item: NativeDragEntry, transferIndex: number, totalCount: number, client: any): Promise<void> {
+  const itemIndex = item.index;
   if (!item || item.isDirectory) {
     sendHelperLine(state, `ERROR\t${itemIndex}\t${Buffer.from('无效的远程文件索引').toString('base64')}`);
     return;
   }
-  if (state.requestedIndexes.has(itemIndex)) {
-    sendHelperLine(state, `READY\t${itemIndex}`);
-    return;
-  }
   state.requestedIndexes.add(itemIndex);
   const control = beginTransferBatch(state);
-  const fileEntries = state.entries.filter((entry) => !entry.isDirectory);
-  const transferIndex = Math.max(0, fileEntries.findIndex((entry) => entry.index === itemIndex));
   const localPath = path.join(state.tempRoot, `${item.index}.data`);
   try {
-    if (state.cancelled || control.cancelled) throw new Error('拖拽下载已取消');
+    if (state.cancelled || state.stopped || control.cancelled) throw new Error('拖拽下载已取消');
     await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-    const client = await getTransferClient(state);
     const remotePath = await resolveRemotePath(client, item.remotePath);
     emitSftpProgressMaybe(
       {
@@ -227,7 +232,7 @@ async function transferRequestedItem(state: NativeDragState, itemIndex: number):
         batchId: state.batchId,
         direction: 'download',
         index: transferIndex,
-        totalCount: fileEntries.length,
+        totalCount,
         completedCount: state.successCount + state.failedCount,
         name: item.name.replace(/\\/g, '/'),
         transferred: 0,
@@ -237,13 +242,13 @@ async function transferRequestedItem(state: NativeDragState, itemIndex: number):
     );
     await client.fastGet(remotePath, localPath, {
       step: (transferred: number, _chunk: number, total: number) => {
-        if (state.cancelled || control.cancelled) return;
+        if (state.cancelled || state.stopped || control.cancelled) return;
         emitSftpProgressMaybe({
           sessionId: state.sessionId,
           batchId: state.batchId,
           direction: 'download',
           index: transferIndex,
-          totalCount: fileEntries.length,
+          totalCount,
           completedCount: state.successCount + state.failedCount,
           name: item.name.replace(/\\/g, '/'),
           transferred,
@@ -251,7 +256,7 @@ async function transferRequestedItem(state: NativeDragState, itemIndex: number):
         });
       },
     });
-    if (state.cancelled || control.cancelled) throw new Error('拖拽下载已取消');
+    if (state.cancelled || state.stopped || control.cancelled) throw new Error('拖拽下载已取消');
     state.successCount += 1;
     emitSftpProgressMaybe(
       {
@@ -259,7 +264,7 @@ async function transferRequestedItem(state: NativeDragState, itemIndex: number):
         batchId: state.batchId,
         direction: 'download',
         index: transferIndex,
-        totalCount: fileEntries.length,
+        totalCount,
         completedCount: state.successCount + state.failedCount,
         name: item.name.replace(/\\/g, '/'),
         transferred: item.size,
@@ -267,10 +272,13 @@ async function transferRequestedItem(state: NativeDragState, itemIndex: number):
       },
       true,
     );
+    state.completedItems.set(itemIndex, '');
     sendHelperLine(state, `READY\t${itemIndex}`);
   } catch (error) {
+    if (state.stopped) return;
     state.failedCount += 1;
     const message = String(error);
+    state.completedItems.set(itemIndex, message);
     emitSftpBatchError({
       sessionId: state.sessionId,
       batchId: state.batchId,
@@ -284,7 +292,7 @@ async function transferRequestedItem(state: NativeDragState, itemIndex: number):
         batchId: state.batchId,
         direction: 'download',
         index: transferIndex,
-        totalCount: fileEntries.length,
+        totalCount,
         completedCount: state.successCount + state.failedCount,
         name: item.name.replace(/\\/g, '/'),
         transferred: 0,
@@ -300,26 +308,44 @@ function handleHelperLine(state: NativeDragState, line: string): void {
   const parts = line.split('\t');
   if (parts[0] === 'REQUEST') {
     const index = Number(parts[1]);
-    state.transferChain = state.transferChain.then(() => transferRequestedItem(state, index));
+    if (!Number.isInteger(index) || !state.entries[index] || state.entries[index].isDirectory) return;
+    if (state.completedItems.has(index)) {
+      const error = state.completedItems.get(index)!;
+      sendHelperLine(state, error ? `ERROR\t${index}\t${Buffer.from(error).toString('base64')}` : `READY\t${index}`);
+    } else if (!state.downloadsStarted) {
+      state.downloadsStarted = true;
+      state.transferChain = state.transferChain.then(() => downloadDragFiles(state, index));
+    }
     return;
   }
-  if (parts[0] === 'REQUEST_LOCAL') {
-    if (!state.localPreparationStarted && state.directoryRoots && state.directoryRootNames) {
-      state.localPreparationStarted = true;
-      state.transferChain = stageDirectoryDrag(state, state.directoryRoots, state.directoryRootNames);
+  if (parts[0] === 'REQUEST_MANIFEST') {
+    if (!state.manifestPreparationStarted) {
+      state.manifestPreparationStarted = true;
+      state.transferChain = prepareDragManifest(state);
     }
+    return;
+  }
+  if (parts[0] === 'DROPPED') {
+    // 松手后解除前端拖拽状态，下载任务继续独立运行。
+    safeSend('sftp:native-drag-ended', { token: state.token, error: '' });
+    return;
+  }
+  if (parts[0] === 'TRANSFER_END') {
+    state.stopped = true;
+    if ([-2147023673, -2147467260].includes(Number(parts[1])) || Number(parts[2]) === 0 && Number(parts[1]) >= 0) state.cancelled = true;
+    void closeDragClients(state);
     return;
   }
   if (parts[0] === 'RETURNED') {
     state.cancelled = true;
     if (state.control) state.control.cancelled = true;
-    if (state.client) void state.client.end().catch(() => undefined);
+    void closeDragClients(state);
     return;
   }
   if (parts[0] === 'END' && Number(parts[2] || 0) === 0) {
     state.cancelled = true;
     if (state.control) state.control.cancelled = true;
-    if (state.client) void state.client.end().catch(() => undefined);
+    void closeDragClients(state);
     return;
   }
   if (parts[0] === 'ERROR') {
@@ -327,14 +353,22 @@ function handleHelperLine(state: NativeDragState, line: string): void {
   }
 }
 
+/** 关闭本次拖拽持有的全部通道，保留交互终端连接。 */
+async function closeDragClients(state: NativeDragState): Promise<void> {
+  const clients = new Set([state.client, ...(state.control?.clients || [])].filter(Boolean));
+  await Promise.all(Array.from(clients, (client) => client.end().catch(() => undefined)));
+  state.client = undefined;
+  if (state.control) {
+    state.control.client = undefined;
+    state.control.clients = [];
+  }
+}
+
 async function finalizeNativeDrag(state: NativeDragState): Promise<void> {
   if (state.finalized) return;
   state.finalized = true;
   await state.transferChain.catch(() => undefined);
-  if (state.client) {
-    await state.client.end().catch(() => undefined);
-    state.client = undefined;
-  }
+  await closeDragClients(state);
   if (state.control) {
     sftpBatchControlMap.delete(state.batchId);
     state.control.client = undefined;
@@ -381,7 +415,7 @@ function launchNativeDrag(state: NativeDragState): void {
     JSON.stringify({
       TempRoot: state.tempRoot,
       SourceWindowHandle: sourceWindowHandle,
-      LocalPaths: state.localPaths || [],
+      ExpandDirectories: state.roots.some((root) => root.isDirectory),
       Items: state.entries.map((entry) => ({
         Index: entry.index,
         Name: entry.name,
@@ -398,6 +432,9 @@ function launchNativeDrag(state: NativeDragState): void {
   });
   state.phase = 'native';
   state.child = child;
+  child.stdin.on('error', (error) => {
+    if (!state.stopped && !state.cancelled) state.helperError = String(error);
+  });
   let stdoutBuffer = '';
   let stderrBuffer = '';
   const maxStdoutLineLength = 64 * 1024;
@@ -438,6 +475,8 @@ function launchNativeDrag(state: NativeDragState): void {
   });
   child.on('close', (code) => {
     clearTimeout(helperTimeout);
+    state.stopped = true;
+    void closeDragClients(state);
     if (!state.cancelled && code && !state.helperError) {
       state.helperError = stderrBuffer.trim() || `Windows 拖拽辅助程序异常退出 (${code})`;
     }
@@ -458,133 +497,58 @@ function normalizePayloadItems(items: RendererDragItem[]): RendererDragItem[] {
     .filter((item) => !!item.remotePath);
 }
 
-async function stageDirectoryDrag(
-  state: NativeDragState,
-  roots: RendererDragItem[],
-  rootNames: Map<string, string>,
-): Promise<void> {
+/** 后台展开目录，只生成描述符，不在悬停阶段读取远端。 */
+async function prepareDragManifest(state: NativeDragState): Promise<void> {
   const control = beginTransferBatch(state);
   try {
-    emitSftpProgressMaybe(
-      {
-        sessionId: state.sessionId,
-        batchId: state.batchId,
-        direction: 'download',
-        index: 0,
-        totalCount: 0,
-        completedCount: 0,
-        name: '准备拖拽目录',
-        transferred: 0,
-        total: 0,
-      },
-      true,
-    );
+    emitSftpProgressMaybe({ sessionId: state.sessionId, batchId: state.batchId, direction: 'download', index: 0, totalCount: 0, completedCount: 0, name: '正在读取目录', transferred: 0, total: 0 }, true);
     const client = await getTransferClient(state);
     const entries: NativeDragEntry[] = [];
-    for (const root of roots) {
-      if (state.cancelled || control.cancelled) throw new Error('拖拽已取消');
-      const resolvedRemotePath = await resolveRemotePath(client, root.remotePath);
-      const displayName = rootNames.get(root.remotePath) || sanitizeWindowsName(root.name);
-      if (root.isDirectory) {
-        await collectDirectoryEntries(client, resolvedRemotePath, displayName, entries, state);
-      } else {
-        appendEntry(entries, {
-          name: displayName,
-          remotePath: resolvedRemotePath,
-          isDirectory: false,
-          size: root.size,
-        });
-      }
+    for (const root of state.roots) {
+      if (state.cancelled || state.stopped || control.cancelled) throw new Error('拖拽下载已取消');
+      const remotePath = await resolveRemotePath(client, root.remotePath);
+      const name = state.rootNames.get(root.remotePath)!;
+      if (root.isDirectory) await collectDirectoryEntries(client, remotePath, name, entries, state);
+      else appendEntry(entries, { name, remotePath, isDirectory: false, size: root.size });
     }
     state.entries = entries;
-    const stagingRoot = path.join(state.tempRoot, 'staged');
-    for (const entry of entries.filter((item) => item.isDirectory)) {
-      await fs.promises.mkdir(path.join(stagingRoot, entry.name), { recursive: true });
-    }
-    const fileEntries = entries.filter((item) => !item.isDirectory);
-    for (let index = 0; index < fileEntries.length; index += 1) {
-      if (state.cancelled || control.cancelled) throw new Error('拖拽已取消');
-      const entry = fileEntries[index];
-      const localPath = path.join(stagingRoot, entry.name);
-      state.requestedIndexes.add(entry.index);
-      await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-      emitSftpProgressMaybe(
-        {
-          sessionId: state.sessionId,
-          batchId: state.batchId,
-          direction: 'download',
-          index,
-          totalCount: fileEntries.length,
-          completedCount: state.successCount + state.failedCount,
-          name: entry.name.replace(/\\/g, '/'),
-          transferred: 0,
-          total: entry.size,
-        },
-        true,
-      );
-      try {
-        await client.fastGet(entry.remotePath, localPath, {
-          step: (transferred: number, _chunk: number, total: number) => {
-            if (state.cancelled || control.cancelled) return;
-            emitSftpProgressMaybe({
-              sessionId: state.sessionId,
-              batchId: state.batchId,
-              direction: 'download',
-              index,
-              totalCount: fileEntries.length,
-              completedCount: state.successCount + state.failedCount,
-              name: entry.name.replace(/\\/g, '/'),
-              transferred,
-              total: total || entry.size,
-            });
-          },
-        });
-      } catch (error) {
-        state.failedCount += 1;
-        emitSftpBatchError({
-          sessionId: state.sessionId,
-          batchId: state.batchId,
-          direction: 'download',
-          name: entry.name.replace(/\\/g, '/'),
-          error: String(error),
-        });
-        emitSftpProgressMaybe(
-          {
-            sessionId: state.sessionId,
-            batchId: state.batchId,
-            direction: 'download',
-            index,
-            totalCount: fileEntries.length,
-            completedCount: state.successCount + state.failedCount,
-            name: entry.name.replace(/\\/g, '/'),
-            transferred: 0,
-            total: entry.size,
-          },
-          true,
-        );
-        throw error;
-      }
-      state.successCount += 1;
-      emitSftpProgressMaybe(
-        {
-          sessionId: state.sessionId,
-          batchId: state.batchId,
-          direction: 'download',
-          index,
-          totalCount: fileEntries.length,
-          completedCount: state.successCount + state.failedCount,
-          name: entry.name.replace(/\\/g, '/'),
-          transferred: entry.size,
-          total: entry.size,
-        },
-        true,
-      );
-    }
-    sendHelperLine(state, 'LOCAL_READY');
+    await fs.promises.writeFile(path.join(state.tempRoot, 'expanded-items.json'), JSON.stringify(entries.map((entry) => ({ Index: entry.index, Name: entry.name, IsDirectory: entry.isDirectory, Size: entry.size }))), 'utf8');
+    if (state.cancelled || state.stopped || control.cancelled) throw new Error('拖拽下载已取消');
+    sendHelperLine(state, 'MANIFEST_READY');
   } catch (error) {
     const message = String(error);
     if (!state.cancelled && !control.cancelled) state.helperError = message;
-    sendHelperLine(state, `LOCAL_ERROR\t${Buffer.from(message).toString('base64')}`);
+    sendHelperLine(state, `MANIFEST_ERROR\t${Buffer.from(message).toString('base64')}`);
+  }
+}
+
+/** 虚拟文件和文件夹共用有限并发下载池，完成内容按索引交给 Shell。 */
+async function downloadDragFiles(state: NativeDragState, requestedIndex: number): Promise<void> {
+  const entries = state.entries.filter((entry) => !entry.isDirectory);
+  // 优先满足 Shell 当前请求，其余内容交给有限并发预取。
+  const order = entries.map((entry, index) => ({ entry, index }));
+  order.sort((a, b) => Number(b.entry.index === requestedIndex) - Number(a.entry.index === requestedIndex));
+  const control = beginTransferBatch(state);
+  try {
+    const client = await getTransferClient(state);
+    const session = await getSessionForConnection(state.sessionId);
+    const extras = await createWorkerSftpClients(state.sessionId, session, Math.min(DEFAULT_TRANSFER_CONCURRENCY, entries.length) - 1);
+    const workers = [client, ...extras];
+    control.clients = workers;
+    await runWithConcurrency(entries.length, workers.length, async (index, workerIndex) => {
+      if (state.stopped) return;
+      await transferRequestedItem(state, order[index].entry, order[index].index, entries.length, workers[workerIndex]);
+    });
+  } catch (error) {
+    if (state.stopped) return;
+    const message = String(error);
+    state.helperError = message;
+    for (const entry of entries) {
+      state.completedItems.set(entry.index, message);
+      sendHelperLine(state, `ERROR\t${entry.index}\t${Buffer.from(message).toString('base64')}`);
+    }
+  } finally {
+    if (state.stopped || state.cancelled || control.cancelled) await closeDragClients(state);
   }
 }
 
@@ -622,33 +586,22 @@ export function registerNativeFileDragIpc(): void {
         batchId: createBatchId(),
         transferChain: Promise.resolve(),
         requestedIndexes: new Set<number>(),
+        completedItems: new Map<number, string>(),
         successCount: 0,
         failedCount: 0,
         helperError: '',
-        localPreparationStarted: false,
+        roots,
+        rootNames,
+        manifestPreparationStarted: false,
+        downloadsStarted: false,
+        stopped: false,
       };
       nativeDragMap.set(token, state);
-      if (roots.some((root) => root.isDirectory)) {
-        const stagingRoot = path.join(state.tempRoot, 'staged');
-        state.localPaths = roots.map((root) => path.join(
-          stagingRoot,
-          rootNames.get(root.remotePath) || sanitizeWindowsName(root.name),
-        ));
-        state.directoryRoots = roots;
-        state.directoryRootNames = rootNames;
-        try {
-          launchNativeDrag(state);
-        } catch (error) {
-          state.helperError = String(error);
-          void finalizeNativeDrag(state);
-        }
-        return;
-      }
       for (const root of roots) {
         appendEntry(state.entries, {
           name: rootNames.get(root.remotePath) || sanitizeWindowsName(root.name),
           remotePath: root.remotePath,
-          isDirectory: false,
+          isDirectory: root.isDirectory,
           size: root.size,
         });
       }
@@ -668,10 +621,7 @@ export function registerNativeFileDragIpc(): void {
     state.cancelled = true;
     if (state.control) state.control.cancelled = true;
     if (state.child && !state.child.killed) state.child.kill();
-    if (state.client) {
-      await state.client.end().catch(() => undefined);
-      state.client = undefined;
-    }
+    await closeDragClients(state);
     if (!state.child) await finalizeNativeDrag(state);
     return true;
   });
@@ -681,6 +631,6 @@ export function cancelAllNativeFileDrags(): void {
   for (const state of nativeDragMap.values()) {
     state.cancelled = true;
     if (state.child && !state.child.killed) state.child.kill();
-    if (state.client) void state.client.end().catch(() => undefined);
+    void closeDragClients(state);
   }
 }

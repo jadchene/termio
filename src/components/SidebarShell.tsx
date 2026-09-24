@@ -44,9 +44,9 @@ type SidebarShellProps = {
   formatSftpMeta: (item: SftpItem) => string;
   sftpInteractions: {
     onDragEnter: (e: DragEvent<HTMLDivElement>) => void;
-    onDragOver: (e: DragEvent<HTMLDivElement>) => void;
+    onDragOver: (e: DragEvent<HTMLDivElement>) => boolean;
     onDragLeave: () => void;
-    onDrop: (e: DragEvent<HTMLDivElement>) => Promise<void>;
+    onDrop: (e: DragEvent<HTMLDivElement>, targetPath?: string) => Promise<void>;
     onToggleShowHidden: () => Promise<void>;
     onRefresh: () => Promise<void>;
     onGoParent: () => Promise<void>;

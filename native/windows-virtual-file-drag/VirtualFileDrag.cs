@@ -41,8 +41,7 @@ namespace MyTerminal.VirtualFileDrag
                 string json = File.ReadAllText(args[0], Encoding.UTF8);
                 manifest = new JavaScriptSerializer().Deserialize<DragManifest>(json);
                 bool hasVirtualFiles = manifest != null && manifest.Items != null && manifest.Items.Count > 0;
-                bool hasLocalPaths = manifest != null && manifest.LocalPaths != null && manifest.LocalPaths.Count > 0;
-                if (!hasVirtualFiles && !hasLocalPaths)
+                if (!hasVirtualFiles)
                 {
                     throw new InvalidDataException("The drag manifest is empty.");
                 }
@@ -70,13 +69,16 @@ namespace MyTerminal.VirtualFileDrag
                     ? new IntPtr(sourceWindowValue)
                     : IntPtr.Zero;
                 mouseRelay = new MouseInputRelay(sourceWindow);
-                protocol = new TransferProtocol(manifest.TempRoot, mouseRelay);
+                protocol = new TransferProtocol(manifest.TempRoot);
                 protocol.Start();
-                dataObject = new VirtualFileDataObject(manifest.Items, manifest.LocalPaths, protocol);
+                dataObject = new VirtualFileDataObject(manifest.Items, manifest.ExpandDirectories, protocol);
                 mouseRelay.Start();
                 uint effect;
                 WriteProtocolLine("DRAGGING");
                 int result = NativeMethods.DoDragDrop(dataObject, new DropSource(mouseRelay), DropEffectCopy, out effect);
+                mouseRelay.Dispose();
+                WriteProtocolLine("DROPPED\t" + effect);
+                dataObject.WaitForCompletion();
                 WriteProtocolLine("END\t" + result + "\t" + effect);
                 return result == NativeMethods.DragDropSCancel || result == NativeMethods.DragDropSDrop ? 0 : 5;
             }
@@ -165,7 +167,7 @@ namespace MyTerminal.VirtualFileDrag
                     {
                         hasLeftSource = true;
                     }
-                    else if (hasLeftSource && !returnedToSource)
+                    else if (leftDown && hasLeftSource && !returnedToSource)
                     {
                         returnedToSource = true;
                         Program.WriteProtocolLine("RETURNED");
@@ -191,7 +193,7 @@ namespace MyTerminal.VirtualFileDrag
         public string TempRoot { get; set; }
         public string SourceWindowHandle { get; set; }
         public List<DragItem> Items { get; set; }
-        public List<string> LocalPaths { get; set; }
+        public bool ExpandDirectories { get; set; }
     }
 
     internal sealed class DragItem
@@ -211,22 +213,28 @@ namespace MyTerminal.VirtualFileDrag
         }
 
         private readonly string tempRoot;
-        private readonly MouseInputRelay mouseRelay;
         private readonly Dictionary<int, PendingTransfer> pending = new Dictionary<int, PendingTransfer>();
         private readonly object sync = new object();
-        private readonly ManualResetEvent localPathsReady = new ManualResetEvent(false);
+        private readonly ManualResetEvent manifestReady = new ManualResetEvent(false);
         private Thread readerThread;
-        private bool disposed;
-        private string localPathsError;
+        private volatile bool disposed;
+        private volatile bool cancelled;
+        private bool manifestRequested;
+        private string manifestError;
+        private volatile string terminalError;
 
-        public TransferProtocol(string tempRootValue, MouseInputRelay relay)
+        /** 传输进程关闭后，消息泵不能继续无期限等待 Shell。 */
+        public bool IsClosed { get { return disposed || terminalError != null; } }
+        /** Shell 有时将已跳过的取消请求按成功结束，必须保留源端取消状态。 */
+        public bool IsCancelled { get { return cancelled; } }
+
+        public TransferProtocol(string tempRootValue)
         {
             if (string.IsNullOrWhiteSpace(tempRootValue))
             {
                 throw new InvalidDataException("A transfer temp directory is required.");
             }
             tempRoot = Path.GetFullPath(tempRootValue);
-            mouseRelay = relay;
             Directory.CreateDirectory(tempRoot);
         }
 
@@ -241,31 +249,25 @@ namespace MyTerminal.VirtualFileDrag
         public string PrepareItem(int index)
         {
             string localPath = Path.Combine(tempRoot, index.ToString() + ".data");
-            PendingTransfer transfer = new PendingTransfer();
+            PendingTransfer transfer;
+            bool request = false;
             lock (sync)
             {
-                if (disposed)
-                {
-                    throw new ObjectDisposedException("TransferProtocol");
+                if (cancelled) throw new COMException("拖拽下载已取消", NativeMethods.ErrorCancelled);
+                if (IsClosed) throw new IOException(terminalError ?? "下载进程已结束");
+                if (!pending.TryGetValue(index, out transfer)) {
+                    transfer = new PendingTransfer();
+                    pending.Add(index, transfer);
+                    request = true;
                 }
-                pending[index] = transfer;
             }
 
-            Program.WriteProtocolLine("REQUEST\t" + index);
+            if (request) Program.WriteProtocolLine("REQUEST\t" + index);
             if (!transfer.Completed.WaitOne(TimeSpan.FromHours(12)))
             {
-                lock (sync)
-                {
-                    pending.Remove(index);
-                }
                 throw new TimeoutException("Timed out while waiting for SFTP content.");
             }
-
-            lock (sync)
-            {
-                pending.Remove(index);
-            }
-            transfer.Completed.Dispose();
+            if (cancelled) throw new COMException("拖拽下载已取消", NativeMethods.ErrorCancelled);
             if (!string.IsNullOrEmpty(transfer.Error))
             {
                 throw new IOException(transfer.Error);
@@ -273,29 +275,25 @@ namespace MyTerminal.VirtualFileDrag
             return localPath;
         }
 
-        public void WaitForLocalPaths()
+        /** 只在后台提取阶段展开目录；悬停始终使用初始根条目。 */
+        public List<DragItem> PrepareManifest()
         {
-            while ((NativeMethods.GetAsyncKeyState(NativeMethods.VirtualKeyLeftButton) & 0x8000) != 0)
-            {
-                if (mouseRelay.ReturnedToSource)
-                {
-                    throw new COMException("The directory drag returned to the source window.", NativeMethods.ErrorCancelled);
+            lock (sync) {
+                if (cancelled) throw new COMException("拖拽下载已取消", NativeMethods.ErrorCancelled);
+                if (IsClosed) throw new IOException(terminalError ?? "下载进程已结束");
+                if (!manifestRequested) {
+                    manifestRequested = true;
+                    Program.WriteProtocolLine("REQUEST_MANIFEST");
                 }
-                Thread.Sleep(12);
             }
-            if (mouseRelay.ReturnedToSource)
+            if (!manifestReady.WaitOne(TimeSpan.FromHours(12)))
             {
-                throw new COMException("The directory drag returned to the source window.", NativeMethods.ErrorCancelled);
+                throw new TimeoutException("读取远端目录超时");
             }
-            Program.WriteProtocolLine("REQUEST_LOCAL");
-            if (!localPathsReady.WaitOne(TimeSpan.FromHours(12)))
-            {
-                throw new TimeoutException("Timed out while preparing the dragged directory.");
-            }
-            if (!string.IsNullOrEmpty(localPathsError))
-            {
-                throw new IOException(localPathsError);
-            }
+            if (cancelled) throw new COMException("拖拽下载已取消", NativeMethods.ErrorCancelled);
+            if (!string.IsNullOrEmpty(manifestError)) throw new IOException(manifestError);
+            var serializer = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
+            return serializer.Deserialize<List<DragItem>>(File.ReadAllText(Path.Combine(tempRoot, "expanded-items.json"), Encoding.UTF8));
         }
 
         private void ReadResponses()
@@ -305,32 +303,36 @@ namespace MyTerminal.VirtualFileDrag
                 string line;
                 while (!disposed && (line = Console.In.ReadLine()) != null)
                 {
-                    if (line == "LOCAL_READY")
-                    {
-                        localPathsReady.Set();
+                    if (line == "CANCEL") {
+                        cancelled = true;
+                        FailAll("拖拽下载已取消", false);
                         continue;
                     }
-                    if (line.StartsWith("LOCAL_ERROR\t", StringComparison.Ordinal))
+                    if (line == "MANIFEST_READY")
                     {
-                        localPathsError = Decode(line.Substring("LOCAL_ERROR\t".Length));
-                        localPathsReady.Set();
+                        manifestReady.Set();
+                        continue;
+                    }
+                    if (line.StartsWith("MANIFEST_ERROR\t", StringComparison.Ordinal))
+                    {
+                        manifestError = Decode(line.Substring("MANIFEST_ERROR\t".Length));
+                        manifestReady.Set();
                         continue;
                     }
                     string[] parts = line.Split(new[] { '\t' }, 3);
                     if (parts.Length < 2) continue;
                     int index;
-                    if (!int.TryParse(parts[1], out index)) continue;
+                    if (!int.TryParse(parts[1], out index) || index < 0 || index >= 50000) continue;
+                    if (parts[0] != "READY" && parts[0] != "ERROR") continue;
                     PendingTransfer transfer;
                     lock (sync)
                     {
-                        if (!pending.TryGetValue(index, out transfer)) continue;
-                    }
-                    if (parts[0] == "ERROR")
-                    {
-                        transfer.Error = parts.Length >= 3 ? Decode(parts[2]) : "SFTP download failed.";
-                    }
-                    if (parts[0] == "READY" || parts[0] == "ERROR")
-                    {
+                        if (!pending.TryGetValue(index, out transfer)) {
+                            transfer = new PendingTransfer();
+                            pending.Add(index, transfer);
+                        }
+                        if (transfer.Completed.WaitOne(0)) continue;
+                        if (parts[0] == "ERROR") transfer.Error = parts.Length >= 3 ? Decode(parts[2]) : "SFTP download failed.";
                         transfer.Completed.Set();
                     }
                 }
@@ -342,11 +344,6 @@ namespace MyTerminal.VirtualFileDrag
             finally
             {
                 FailAll("The Electron transfer process ended.");
-                if (!disposed && string.IsNullOrEmpty(localPathsError))
-                {
-                    localPathsError = "The Electron transfer process ended.";
-                }
-                localPathsReady.Set();
             }
         }
 
@@ -362,12 +359,16 @@ namespace MyTerminal.VirtualFileDrag
             }
         }
 
-        private void FailAll(string message)
+        private void FailAll(string message, bool disconnected = true)
         {
             lock (sync)
             {
+                if (disconnected) terminalError = message;
+                manifestError = manifestError ?? message;
+                manifestReady.Set();
                 foreach (PendingTransfer transfer in pending.Values)
                 {
+                    if (transfer.Completed.WaitOne(0)) continue;
                     transfer.Error = message;
                     transfer.Completed.Set();
                 }
@@ -380,20 +381,14 @@ namespace MyTerminal.VirtualFileDrag
             {
                 if (disposed) return;
                 disposed = true;
-                foreach (PendingTransfer transfer in pending.Values)
-                {
-                    transfer.Error = "The drag operation was cancelled.";
-                    transfer.Completed.Set();
-                }
-                localPathsError = "The drag operation was cancelled.";
-                localPathsReady.Set();
+                FailAll("拖拽下载已取消");
             }
         }
     }
 
     [ComVisible(true)]
     [ClassInterface(ClassInterfaceType.None)]
-    internal sealed class VirtualFileDataObject : IDataObject, IDisposable
+    internal sealed class VirtualFileDataObject : IDataObject, IDataObjectAsyncCapability, IDisposable
     {
         private const int S_OK = 0;
         private const int E_NOTIMPL = unchecked((int)0x80004001);
@@ -401,24 +396,75 @@ namespace MyTerminal.VirtualFileDrag
         private const int DV_E_LINDEX = unchecked((int)0x80040068);
         private const uint FdAttributes = 0x00000004;
         private const uint FdFileSize = 0x00000040;
-        private const uint FdProgressUi = 0x00004000;
         private const uint FdUnicode = 0x80000000;
         private const uint FileAttributeDirectory = 0x00000010;
         private const uint FileAttributeNormal = 0x00000080;
-        private const short FileDropFormat = 15;
 
-        private readonly List<DragItem> items;
-        private readonly List<string> localPaths;
+        private List<DragItem> items;
+        private bool expandDirectories;
+        private readonly object manifestSync = new object();
         private readonly TransferProtocol protocol;
         private readonly short fileGroupDescriptorFormat;
         private readonly short fileContentsFormat;
         private readonly short preferredDropEffectFormat;
         private readonly List<IStream> openStreams = new List<IStream>();
+        // 异步协商只负责生命周期；耗时内容请求由接收方后台线程发起。
+        private volatile bool asyncMode = true;
+        private volatile bool inOperation;
+        private readonly ManualResetEvent operationEnded = new ManualResetEvent(false);
+        private int operationFinished;
 
-        public VirtualFileDataObject(List<DragItem> manifestItems, List<string> manifestLocalPaths, TransferProtocol transferProtocol)
+        /** 开启或关闭 Shell 异步提取协商。 */
+        public int SetAsyncMode(bool enabled) { asyncMode = enabled; return S_OK; }
+
+        /** 向接收方报告后台提取能力。 */
+        public int GetAsyncMode(out bool enabled) { enabled = asyncMode; return S_OK; }
+
+        /** 接收方开始后台提取，之后允许等待远端内容。 */
+        public int StartOperation(IBindCtx reserved)
+        {
+            if (!asyncMode || operationFinished != 0) return E_NOTIMPL;
+            inOperation = true;
+            return S_OK;
+        }
+
+        /** 拖放返回后据此保留辅助进程。 */
+        public int InOperation(out bool active) { active = inOperation; return S_OK; }
+
+        /** 接收方完成复制或取消后释放后台生命周期。 */
+        public int EndOperation(int result, IBindCtx reserved, uint effects)
+        {
+            if (Interlocked.Exchange(ref operationFinished, 1) != 0) return S_OK;
+            if (protocol.IsCancelled) { result = NativeMethods.ErrorCancelled; effects = 0; }
+            if (result < 0 && result != unchecked((int)0x800704C7) && result != unchecked((int)0x80004004)) Program.WriteProtocolLine("ERROR\t" + Program.Encode("拖拽下载未完成 (0x" + result.ToString("X8") + ")"));
+            Program.WriteProtocolLine("TRANSFER_END\t" + result + "\t" + effects);
+            inOperation = false;
+            operationEnded.Set();
+            return S_OK;
+        }
+
+        /** 保持 STA 消息泵运行，直到 Shell 完成异步复制。 */
+        public void WaitForCompletion()
+        {
+            DateTime deadline = DateTime.UtcNow.AddHours(12);
+            while (inOperation)
+            {
+                NativeMessage message;
+                while (NativeMethods.PeekMessage(out message, IntPtr.Zero, 0, 0, 1))
+                {
+                    NativeMethods.TranslateMessage(ref message);
+                    NativeMethods.DispatchMessage(ref message);
+                }
+                if (operationEnded.WaitOne(10)) break;
+                if (protocol.IsClosed) throw new IOException("下载进程已结束");
+                if (DateTime.UtcNow >= deadline) throw new TimeoutException("拖拽下载超时");
+            }
+        }
+
+        public VirtualFileDataObject(List<DragItem> manifestItems, bool manifestExpandDirectories, TransferProtocol transferProtocol)
         {
             items = manifestItems ?? new List<DragItem>();
-            localPaths = manifestLocalPaths ?? new List<string>();
+            expandDirectories = manifestExpandDirectories;
             protocol = transferProtocol;
             fileGroupDescriptorFormat = unchecked((short)NativeMethods.RegisterClipboardFormat("FileGroupDescriptorW"));
             fileContentsFormat = unchecked((short)NativeMethods.RegisterClipboardFormat("FileContents"));
@@ -427,14 +473,11 @@ namespace MyTerminal.VirtualFileDrag
 
         public void GetData(ref FORMATETC format, out STGMEDIUM medium)
         {
-            if (localPaths.Count > 0 && format.cfFormat == FileDropFormat && Supports(format, TYMED.TYMED_HGLOBAL))
-            {
-                protocol.WaitForLocalPaths();
-                medium = CreateFileDrop();
-                return;
-            }
             if (format.cfFormat == fileGroupDescriptorFormat && Supports(format, TYMED.TYMED_HGLOBAL))
             {
+                // 目录清单尚未展开时，不能把根条目伪装成可复制的空目录。
+                if (expandDirectories && !inOperation) throw new COMException("目录内容将在松手后读取。", unchecked((int)0x8000000A));
+                EnsureManifest();
                 medium = CreateFileGroupDescriptor();
                 return;
             }
@@ -445,6 +488,8 @@ namespace MyTerminal.VirtualFileDrag
             }
             if (format.cfFormat == fileContentsFormat && Supports(format, TYMED.TYMED_ISTREAM))
             {
+                if (!inOperation) throw new COMException("该位置暂不支持拖拽下载，请使用下载按钮。", unchecked((int)0x8000000A));
+                EnsureManifest();
                 if (format.lindex < 0 || format.lindex >= items.Count)
                 {
                     throw new COMException("Invalid virtual file index.", DV_E_LINDEX);
@@ -467,7 +512,7 @@ namespace MyTerminal.VirtualFileDrag
                 {
                     throw new COMException("Windows could not open the downloaded drag content.", createResult);
                 }
-                openStreams.Add(stream);
+                lock (openStreams) openStreams.Add(stream);
                 medium = new STGMEDIUM
                 {
                     tymed = TYMED.TYMED_ISTREAM,
@@ -487,12 +532,6 @@ namespace MyTerminal.VirtualFileDrag
         public int QueryGetData(ref FORMATETC format)
         {
             if (format.dwAspect != DVASPECT.DVASPECT_CONTENT) return DV_E_FORMATETC;
-            if (localPaths.Count > 0)
-            {
-                if (format.cfFormat == FileDropFormat && Supports(format, TYMED.TYMED_HGLOBAL)) return S_OK;
-                if (format.cfFormat == preferredDropEffectFormat && Supports(format, TYMED.TYMED_HGLOBAL)) return S_OK;
-                return DV_E_FORMATETC;
-            }
             if (format.cfFormat == fileGroupDescriptorFormat && Supports(format, TYMED.TYMED_HGLOBAL)) return S_OK;
             if (format.cfFormat == preferredDropEffectFormat && Supports(format, TYMED.TYMED_HGLOBAL)) return S_OK;
             if (format.cfFormat == fileContentsFormat && Supports(format, TYMED.TYMED_ISTREAM))
@@ -514,8 +553,7 @@ namespace MyTerminal.VirtualFileDrag
 
         public void SetData(ref FORMATETC formatIn, ref STGMEDIUM medium, bool release)
         {
-            // Shell drop targets use SetData to report performed/logical effects and
-            // update drag descriptions. These are feedback formats, not file content.
+            // Shell 通过这些格式反馈复制结果和拖放提示，数据生命周期由异步完成通知控制。
             if (release)
             {
                 NativeMethods.ReleaseStgMedium(ref medium);
@@ -531,13 +569,7 @@ namespace MyTerminal.VirtualFileDrag
             {
                 throw new COMException("Only DATADIR_GET is supported.", E_NOTIMPL);
             }
-            FORMATETC[] formats = localPaths.Count > 0
-                ? new[]
-                {
-                    CreateFormat(FileDropFormat, -1, TYMED.TYMED_HGLOBAL),
-                    CreateFormat(preferredDropEffectFormat, -1, TYMED.TYMED_HGLOBAL),
-                }
-                : new[]
+            FORMATETC[] formats = new[]
                 {
                     CreateFormat(fileGroupDescriptorFormat, -1, TYMED.TYMED_HGLOBAL),
                     CreateFormat(fileContentsFormat, -1, TYMED.TYMED_ISTREAM),
@@ -580,6 +612,17 @@ namespace MyTerminal.VirtualFileDrag
             };
         }
 
+        /** 完整目录只在异步后台请求中加载，避免拖放悬停等待远端。 */
+        private void EnsureManifest()
+        {
+            if (!inOperation || !expandDirectories) return;
+            lock (manifestSync) {
+                if (!expandDirectories) return;
+                items = protocol.PrepareManifest();
+                expandDirectories = false;
+            }
+        }
+
         private STGMEDIUM CreateFileGroupDescriptor()
         {
             int descriptorSize = Marshal.SizeOf(typeof(FileDescriptorW));
@@ -601,7 +644,7 @@ namespace MyTerminal.VirtualFileDrag
                     ulong size = item.Size < 0 ? 0UL : (ulong)item.Size;
                     FileDescriptorW descriptor = new FileDescriptorW
                     {
-                        dwFlags = FdAttributes | FdProgressUi | FdUnicode | (item.IsDirectory ? 0U : FdFileSize),
+                        dwFlags = FdAttributes | FdUnicode | (item.IsDirectory ? 0U : FdFileSize),
                         dwFileAttributes = item.IsDirectory ? FileAttributeDirectory : FileAttributeNormal,
                         nFileSizeHigh = (uint)(size >> 32),
                         nFileSizeLow = (uint)(size & 0xffffffff),
@@ -610,42 +653,6 @@ namespace MyTerminal.VirtualFileDrag
                     IntPtr target = IntPtr.Add(memory, sizeof(uint) + descriptorSize * index);
                     Marshal.StructureToPtr(descriptor, target, false);
                 }
-            }
-            finally
-            {
-                NativeMethods.GlobalUnlock(handle);
-            }
-            return new STGMEDIUM { tymed = TYMED.TYMED_HGLOBAL, unionmember = handle, pUnkForRelease = null };
-        }
-
-        private STGMEDIUM CreateFileDrop()
-        {
-            foreach (string localPath in localPaths)
-            {
-                if (!Path.IsPathRooted(localPath) || !File.Exists(localPath) && !Directory.Exists(localPath))
-                {
-                    throw new FileNotFoundException("A staged drag path is missing.", localPath);
-                }
-            }
-            byte[] pathBytes = Encoding.Unicode.GetBytes(string.Join("\0", localPaths.ToArray()) + "\0\0");
-            const int dropFilesSize = 20;
-            int totalSize = dropFilesSize + pathBytes.Length;
-            IntPtr handle = NativeMethods.GlobalAlloc(NativeMethods.GMemMoveable | NativeMethods.GMemZeroInit, new UIntPtr((uint)totalSize));
-            if (handle == IntPtr.Zero) throw new OutOfMemoryException();
-            IntPtr memory = NativeMethods.GlobalLock(handle);
-            if (memory == IntPtr.Zero)
-            {
-                NativeMethods.GlobalFree(handle);
-                throw new OutOfMemoryException();
-            }
-            try
-            {
-                Marshal.WriteInt32(memory, 0, dropFilesSize);
-                Marshal.WriteInt32(memory, 4, 0);
-                Marshal.WriteInt32(memory, 8, 0);
-                Marshal.WriteInt32(memory, 12, 0);
-                Marshal.WriteInt32(memory, 16, 1);
-                Marshal.Copy(pathBytes, 0, IntPtr.Add(memory, dropFilesSize), pathBytes.Length);
             }
             finally
             {
@@ -671,11 +678,12 @@ namespace MyTerminal.VirtualFileDrag
 
         public void Dispose()
         {
-            foreach (IStream stream in openStreams)
-            {
-                if (Marshal.IsComObject(stream)) Marshal.FinalReleaseComObject(stream);
+            lock (openStreams) {
+                foreach (IStream stream in openStreams) {
+                    if (Marshal.IsComObject(stream)) Marshal.FinalReleaseComObject(stream);
+                }
+                openStreams.Clear();
             }
-            openStreams.Clear();
         }
 
     }
@@ -757,6 +765,24 @@ namespace MyTerminal.VirtualFileDrag
 
         [PreserveSig]
         int GiveFeedback(uint effect);
+    }
+
+    /// <summary>Windows 后台数据提取协商。作者：chenjd；创建时间：2026-09-24 15:00:00。</summary>
+    [ComVisible(true)]
+    [Guid("3D8B0590-F691-11D2-8EA9-006097DF5BD4")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IDataObjectAsyncCapability
+    {
+        /// <summary>设置异步模式。</summary>
+        [PreserveSig] int SetAsyncMode([MarshalAs(UnmanagedType.Bool)] bool enabled);
+        /// <summary>查询异步模式。</summary>
+        [PreserveSig] int GetAsyncMode([MarshalAs(UnmanagedType.Bool)] out bool enabled);
+        /// <summary>开始异步提取。</summary>
+        [PreserveSig] int StartOperation(IBindCtx reserved);
+        /// <summary>查询后台操作状态。</summary>
+        [PreserveSig] int InOperation([MarshalAs(UnmanagedType.Bool)] out bool active);
+        /// <summary>结束异步提取。</summary>
+        [PreserveSig] int EndOperation(int result, IBindCtx reserved, uint effects);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -887,6 +913,12 @@ namespace MyTerminal.VirtualFileDrag
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool PeekMessage(out NativeMessage message, IntPtr window, uint min, uint max, uint remove);
+
+        [DllImport("user32.dll")]
+        internal static extern bool TranslateMessage(ref NativeMessage message);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr DispatchMessage(ref NativeMessage message);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);

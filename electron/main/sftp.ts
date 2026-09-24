@@ -379,20 +379,27 @@ export async function resolveRemotePath(client: any, input: string): Promise<str
   return normalized;
 }
 
+const pendingSftpClients = new WeakMap<object, Promise<any>>();
+
+/** 合并同一 SSH 会话的首次连接，防止并行定位和列表请求重复握手。 */
 export async function getOrCreateSftp(connectionId: number, session: Session): Promise<any> {
+  requireConnected(connectionId);
+  const connection = sshStateMap.get(connectionId)!;
+  const pending = pendingSftpClients.get(connection);
+  if (pending) return pending;
+  const request = openSftp(connectionId, session, connection).finally(() => pendingSftpClients.delete(connection));
+  pendingSftpClients.set(connection, request);
+  return request;
+}
+
+/** 建立或复用目录操作连接，并拒绝已断开会话的迟到连接。 */
+async function openSftp(connectionId: number, session: Session, connection: object): Promise<any> {
   const old = sftpMap.get(connectionId);
   if (old) {
-    try {
-      await old.cwd();
-      return old;
-    } catch {
-      try {
-        await old.end();
-      } catch {
-        // Ignore close errors.
-      }
-      sftpMap.delete(connectionId);
-    }
+    // 使用连接状态复用通道，不为每次目录操作额外发送 REALPATH。
+    if (old.sftp && !old.endCalled && !old.endHandled && !old.closeHandled && !old.errorHandled) return old;
+    sftpMap.delete(connectionId);
+    await old.end().catch(() => undefined);
   }
   const client = new SftpClient();
   const authentication = await buildSshAuthentication(session);
@@ -410,6 +417,10 @@ export async function getOrCreateSftp(connectionId: number, session: Session): P
     rawClient.setMaxListeners(64);
   }
   const cwd = await client.cwd().catch(() => '');
+  if (sshStateMap.get(connectionId) !== connection) {
+    await client.end().catch(() => undefined);
+    throw new Error('SSH 连接已断开');
+  }
   if (cwd && typeof cwd === 'string') {
     connectionHomeMap.set(connectionId, cwd.trim());
   }

@@ -1,6 +1,6 @@
 {
   "name": "termio",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Local Electron SSH terminal with SFTP file management and remote system metrics.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "start": "npm run build && electron dist-electron/electron/main.js",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.electron.json --noEmit",
     "test": "node --import tsx --test tests/**/*.test.ts",
+    "test:native-drag": "npm run build:electron && node --test tests/native/nativeDragProtocol.cjs && node scripts/test-native-drag.cjs",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "keywords": [

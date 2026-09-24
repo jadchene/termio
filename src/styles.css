@@ -461,6 +461,7 @@ select { font: inherit; }
 }
 .sftp-row { transition: background-color .16s ease; }
 .sftp-row:hover { background: var(--app-item-hover); }
+.sftp-row.drop-target { background: rgb(79 140 255 / 18%); outline: 2px solid #4f8cff; outline-offset: -2px; }
 .sftp-row:focus-visible { background: var(--app-item-hover); outline: 2px solid #4f8cff; outline-offset: -2px; }
 .sftp-row:has(.ant-checkbox-checked) { background: var(--app-item-selected); }
 .sftp-row:has(.ant-checkbox-checked):hover { background: color-mix(in srgb, var(--app-item-selected) 82%, #4f8cff); }

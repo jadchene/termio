@@ -1,8 +1,28 @@
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { Client } from 'ssh2';
 import { connectionHomeMap, connectionSessionMap, cwdOutputTailMap, lastKnownCwdMap } from './state';
 
-export const REMOTE_SHELL_CWD_COMMAND = 'sh -c \'connection=${SSH_CONNECTION-}; best_pid=0; best_cwd=; for proc in /proc/[0-9]*; do [ -r "$proc/environ" ] || continue; tty=$(readlink "$proc/fd/0" 2>/dev/null) || continue; case "$tty" in /dev/pts/*|/dev/tty*) ;; *) continue ;; esac; command_name=$(cat "$proc/comm" 2>/dev/null) || continue; case "$command_name" in sh|bash|dash|ash|zsh|ksh|mksh|fish|csh|tcsh|nu|pwsh) ;; *) continue ;; esac; tr "\\000" "\\n" < "$proc/environ" 2>/dev/null | grep -Fqx "SSH_CONNECTION=$connection" || continue; pid=${proc##*/}; [ "$pid" -gt "$best_pid" ] || continue; cwd=$(readlink "$proc/cwd" 2>/dev/null) || continue; best_pid=$pid; best_cwd=$cwd; done; [ -n "$best_cwd" ] && printf "%s\\n" "$best_cwd"\'';
+export const REMOTE_SHELL_CWD_COMMAND = `sh -c '
+connection=\${SSH_CONNECTION-}
+[ -n "$connection" ] || exit 0
+best_pid=0
+best_cwd=
+for proc in /proc/[0-9]*; do
+  [ -r "$proc/environ" ] || continue
+  IFS= read -r command_name < "$proc/comm" 2>/dev/null || continue
+  case "$command_name" in sh|bash|dash|ash|zsh|ksh|mksh|fish|csh|tcsh|nu|pwsh) ;; *) continue ;; esac
+  pid=\${proc##*/}
+  [ "$pid" -gt "$best_pid" ] || continue
+  tty=$(readlink "$proc/fd/0" 2>/dev/null) || continue
+  case "$tty" in /dev/pts/*|/dev/tty*) ;; *) continue ;; esac
+  tr "\\000" "\\n" < "$proc/environ" 2>/dev/null | grep -Fqx "SSH_CONNECTION=$connection" || continue
+  cwd=$(readlink "$proc/cwd" 2>/dev/null) || continue
+  best_pid=$pid
+  best_cwd=$cwd
+done
+[ -n "$best_cwd" ] && printf "%s\\n" "$best_cwd"
+'`;
 
 export const stripAnsi = (input: string): string => input.replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '');
 
@@ -74,30 +94,49 @@ export const parseRemoteShellCwd = (output: string): string | null => {
   return paths[paths.length - 1] || null;
 };
 
-export const getRemoteShellCwd = (client: Client): Promise<string | null> => new Promise((resolve) => {
+const cwdRequests = new WeakMap<Client, Promise<string | null>>();
+
+/** 合并同一连接的目录探测，并将通道建立时间计入超时。 */
+export const getRemoteShellCwd = (client: Client): Promise<string | null> => {
+  const pending = cwdRequests.get(client);
+  if (pending) return pending;
+  const request = probeRemoteShellCwd(client).finally(() => cwdRequests.delete(client));
+  cwdRequests.set(client, request);
+  return request;
+};
+
+/** 在独立执行通道探测目录，不向交互终端注入命令。 */
+const probeRemoteShellCwd = (client: Client): Promise<string | null> => new Promise((resolve) => {
+  let output = '';
+  const decoder = new StringDecoder('utf8');
+  let settled = false;
+  let activeStream: { close: () => unknown } | undefined;
+  const finish = (cwd: string | null) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    resolve(cwd);
+  };
+  const timer = setTimeout(() => {
+    finish(null);
+    activeStream?.close();
+  }, 4000);
+  timer.unref();
   client.exec(REMOTE_SHELL_CWD_COMMAND, (error, stream) => {
-    if (error) {
-      resolve(null);
+    if (settled) {
+      stream?.close();
       return;
     }
-    let output = '';
-    let settled = false;
-    const finish = (cwd: string | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(cwd);
-    };
-    const timer = setTimeout(() => {
-      stream.close();
+    if (error) {
       finish(null);
-    }, 4000);
-    timer.unref();
+      return;
+    }
+    activeStream = stream;
     stream.on('data', (chunk: Buffer) => {
-      output += chunk.toString('utf8');
+      output += decoder.write(chunk);
       if (output.length > 16384) output = output.slice(-16384);
     });
-    stream.on('close', () => finish(parseRemoteShellCwd(output)));
+    stream.on('close', () => finish(parseRemoteShellCwd(output + decoder.end())));
     stream.on('error', () => finish(null));
   });
 });

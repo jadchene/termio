@@ -89,6 +89,7 @@ export async function cleanupConnectionState(connectionId: number, expectedClien
   for (const [, control] of sftpBatchControlMap) {
     if (control.connectionId === connectionId) {
       control.cancelled = true;
+      control.onCancel?.();
       if (control.client && control.ownsClient) {
         batchClientsToClose.add(control.client);
         control.client = undefined;

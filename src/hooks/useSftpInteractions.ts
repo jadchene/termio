@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { Session, Settings, SftpItem, TreeContextMenu } from '../types';
 import { getParentSftpPath } from '../utils/sftpPath';
 import { formatSftpError, isSilentSftpError } from '../utils/sftpError';
@@ -33,6 +33,7 @@ type UseSftpInteractionsParams = {
 };
 
 export function useSftpInteractions(params: UseSftpInteractionsParams) {
+  const cwdRequestRef = useRef(0);
   const {
     activeSessionId,
     activeSession,
@@ -76,7 +77,7 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   const onDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     if (!activeSessionId || !isConnected) return;
     e.preventDefault();
-    if (sftpInternalDragRef.current) {
+    if (sftpInternalDragRef.current || !Array.from(e.dataTransfer.types).includes('Files')) {
       e.dataTransfer.dropEffect = 'none';
       setSftpUploadDropOver(false);
       return;
@@ -86,22 +87,23 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   };
 
   const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!activeSessionId || !isConnected) return;
+    if (!activeSessionId || !isConnected) return false;
     e.preventDefault();
-    if (sftpInternalDragRef.current) {
+    if (sftpInternalDragRef.current || !Array.from(e.dataTransfer.types).includes('Files')) {
       e.dataTransfer.dropEffect = 'none';
       setSftpUploadDropOver(false);
-      return;
+      return false;
     }
     e.dataTransfer.dropEffect = 'copy';
     setSftpUploadDropOver(true);
+    return true;
   };
 
   const onDragLeave = () => {
     setSftpUploadDropOver(false);
   };
 
-  const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  const onDrop = async (e: React.DragEvent<HTMLDivElement>, targetPath = sftpPath) => {
     e.preventDefault();
     setSftpUploadDropOver(false);
     if (!activeSessionId || !isConnected) return;
@@ -122,11 +124,11 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
     }
     const previewNames = droppedFiles.slice(0, 5).map((file) => file.name).join('、');
     const remaining = droppedFiles.length > 5 ? ` 等 ${droppedFiles.length} 项` : '';
-    if (!await askConfirm(`确认上传本地文件：${previewNames}${remaining}？`, 'SFTP 上传')) return;
+    if (!await askConfirm(`将 ${previewNames}${remaining} 上传到 ${targetPath}？`, 'SFTP 上传')) return;
     await runSftpAction(async () => {
       const uploadCapability = await window.terminalApi.sftpAuthorizeDroppedFiles(droppedFiles);
-      await window.terminalApi.sftpUploadBatch({ sessionId: activeSessionId, remoteDir: sftpPath, uploadCapability });
-      await refreshSftp();
+      await window.terminalApi.sftpUploadBatch({ sessionId: activeSessionId, remoteDir: targetPath, uploadCapability });
+      if (getCurrentSftpLocation().sessionId === activeSessionId) await refreshSftp();
     });
   };
 
@@ -154,23 +156,34 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
   const onFollowCwd = async () => {
     if (!activeSessionId || !isConnected) return;
     const requestedSessionId = activeSessionId;
+    const requestId = ++cwdRequestRef.current;
+    const requestedLocation = { ...getCurrentSftpLocation() };
+    // 探测期间切换会话、手动导航或再次定位后，旧结果不再改变目录。
+    const isCurrentRequest = () => {
+      const location = getCurrentSftpLocation();
+      return cwdRequestRef.current === requestId && location.sessionId === requestedSessionId
+        && location.path === (initialPath || requestedLocation.path);
+    };
+    // 立即启动实时探测，避免等待缓存目录的列表请求完成。
+    const liveRequest = window.terminalApi.sshGetCwd(requestedSessionId).catch(() => '');
     let initialPath = '';
     try {
       const cached = await window.terminalApi.sshGetCachedCwd(requestedSessionId);
-      if (getCurrentSftpLocation().sessionId !== requestedSessionId) return;
+      if (!isCurrentRequest()) return;
       if (cached.trim() && await navigateSftp(cached.trim())) {
         initialPath = cached.trim();
       }
       if (!initialPath) {
-        const home = await window.terminalApi.sftpGetHome(requestedSessionId);
-        if (getCurrentSftpLocation().sessionId !== requestedSessionId) return;
+        const live = await liveRequest;
+        const home = live.trim() || await window.terminalApi.sftpGetHome(requestedSessionId);
+        if (!isCurrentRequest()) return;
         const target = home?.trim() || '~';
         if (await navigateSftp(target)) initialPath = target;
       }
     } catch (error) {
       try {
         const home = await window.terminalApi.sftpGetHome(requestedSessionId);
-        if (getCurrentSftpLocation().sessionId !== requestedSessionId) return;
+        if (!isCurrentRequest()) return;
         const target = home?.trim() || '~';
         if (await navigateSftp(target)) initialPath = target;
       } catch (fallbackError) {
@@ -178,7 +191,8 @@ export function useSftpInteractions(params: UseSftpInteractionsParams) {
       }
     }
     if (!initialPath) return;
-    void window.terminalApi.sshGetCwd(requestedSessionId).then(async (livePath) => {
+    void liveRequest.then(async (livePath) => {
+      if (!isCurrentRequest()) return;
       if (!shouldApplyCwdCalibration(
         requestedSessionId,
         initialPath,

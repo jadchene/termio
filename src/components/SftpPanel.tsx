@@ -11,7 +11,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { Button, Checkbox, Empty, Input, Spin, Tooltip } from 'antd';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { SftpItem } from '../types';
 import { TransferList } from './TransferList';
 
@@ -43,9 +43,9 @@ type SftpPanelProps = {
   transferRows: TransferRow[];
   formatSftpMeta: (item: SftpItem) => string;
   onDragEnter: (e: React.DragEvent<HTMLDivElement>) => void;
-  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => boolean;
   onDragLeave: () => void;
-  onDrop: (e: React.DragEvent<HTMLDivElement>) => Promise<void>;
+  onDrop: (e: React.DragEvent<HTMLDivElement>, targetPath?: string) => Promise<void>;
   onToggleShowHidden: () => Promise<void>;
   onRefresh: () => Promise<void>;
   onGoParent: () => Promise<void>;
@@ -101,6 +101,7 @@ export const SftpPanel = (props: SftpPanelProps) => {
     onCancelTransfer,
   } = props;
   const selectedPathSet = useMemo(() => new Set(selectedSftpPaths), [selectedSftpPaths]);
+  const [dropTarget, setDropTarget] = useState('');
 
   if (!activeSessionId) {
     return <div className="panel-empty"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无活动会话" /></div>;
@@ -121,8 +122,15 @@ export const SftpPanel = (props: SftpPanelProps) => {
       className={`sftp-sidebar-content panel-content ${dropOver ? 'drop-over' : ''}`}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={(event) => void onDrop(event)}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDropTarget('');
+        onDragLeave();
+      }}
+      onDrop={(event) => {
+        setDropTarget('');
+        void onDrop(event);
+      }}
     >
       <div className="sidebar-actions sftp-toolbar">
         {toolbarItems.map((item) => (
@@ -156,7 +164,20 @@ export const SftpPanel = (props: SftpPanelProps) => {
           return (
               <div
                 key={`${item.name}-${item.modifyTime}`}
-                className="sftp-row"
+                className={`sftp-row ${dropOver && dropTarget === fullPath ? 'drop-target' : ''}`}
+                onDragOver={(event) => {
+                  const acceptsUpload = onDragOver(event);
+                  setDropTarget(isDir && acceptsUpload ? fullPath : '');
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget('');
+                }}
+                onDrop={(event) => {
+                  if (!isDir) return;
+                  event.stopPropagation();
+                  setDropTarget('');
+                  void onDrop(event, fullPath);
+                }}
                 title={formatSftpMeta(item)}
                 role="option"
                 aria-selected={selectedPathSet.has(fullPath)}

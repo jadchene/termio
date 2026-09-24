@@ -588,6 +588,7 @@ export function registerIpc() {
     const batch = sftpBatchControlMap.get(batchId);
     if (!batch || batch.sessionId !== sessionId) return false;
     batch.cancelled = true;
+    batch.onCancel?.();
     const clients = new Set<any>([...(batch.clients || []), ...(batch.client ? [batch.client] : [])]);
     if (batch.ownsClient) await Promise.all(Array.from(clients, async (client) => client.end().catch(() => null)));
     batch.client = undefined;

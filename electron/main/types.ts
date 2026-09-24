@@ -68,6 +68,8 @@ export type SftpBatchControl = {
   client?: any;
   clients?: any[];
   ownsClient?: boolean;
+  /** 取消时通知原生接收方，解除等待中的数据请求。 */
+  onCancel?: () => void;
 };
 
 export type SftpProgressThrottleState = {
